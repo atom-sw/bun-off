@@ -7,20 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- `boff deploy` and `boff check` accept a Git URL as their manifest argument, not only a local
-  path. The manifest names what to deploy; the workspace stays the current directory.
-- Manifest references accept a repository URL without a `.git` suffix, and a forge's browser URL
-  (`https://github.com/org/repo/tree/main/sub`, GitLab's `/-/tree/`). Both `extends:` and the CLI
-  argument use this one scheme.
+## [0.1.1] - 2026-07-09
 
 ### Fixed
 
-- A Git URL passed to `boff deploy` resolved as a local path, failing with an unhandled
-  `FileNotFoundError` traceback. The CLI never consulted the manifest-source registry.
-- A failed reference resolution (bad URL, failed `git` command, missing `boff.yaml`) raised a
-  traceback instead of a `ManifestError`, so it printed no readable message.
+- `mise run sync` failed with `uv: not found` on a machine with mise but no separately installed
+  uv, because `.mise.toml` declared only Python. It now declares `uv` too, so `mise run <task>`
+  provisions the whole toolchain. This affects contributors and CI; installed packages are
+  unchanged.
 
 ## [0.1.0] - 2026-07-09
 
@@ -44,5 +38,6 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/atom-sw/bun-off/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/atom-sw/bun-off/releases/tag/v0.1.0

@@ -1,5 +1,8 @@
 [tools]
 python = "3.12"
+# Every task below shells out to uv, so mise must provision it: a CI runner has
+# nothing on PATH beyond what this section names.
+uv = "0.11"
 
 [env]
 _.python.venv = { path = ".venv", create = true }
