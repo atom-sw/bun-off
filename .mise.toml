@@ -1,0 +1,60 @@
+[tools]
+python = "3.12"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.sync]
+description = "Install dependencies"
+run = "uv sync --all-extras"
+
+[tasks.test]
+description = "Run tests"
+run = "uv run pytest"
+
+[tasks.test-cov]
+description = "Run tests with coverage report"
+run = "uv run pytest --cov=boff --cov-report=html --cov-report=term"
+
+[tasks.lint]
+description = "Run linter"
+run = "uv run ruff check src/ tests/"
+
+[tasks.lint-fix]
+description = "Run linter with auto-fix"
+run = "uv run ruff check --fix src/ tests/"
+
+[tasks.format]
+description = "Format code"
+run = "uv run ruff format src/ tests/"
+
+[tasks.format-check]
+description = "Check code formatting"
+run = "uv run ruff format --check src/ tests/"
+
+[tasks.typecheck]
+description = "Run type checker"
+run = "uv run pyright src/boff tests"
+
+[tasks.check]
+description = "Run all checks (typecheck, test, lint, format)"
+depends = ["typecheck", "test", "lint", "format-check"]
+
+[tasks.dev]
+description = "Install package in development mode"
+run = "uv pip install -e ."
+
+[tasks.build]
+description = "Build sdist and wheel into dist/"
+run = "uv build"
+
+[tasks.publish-test]
+description = "Upload to TestPyPI (dry run before a real release)"
+run = "uv publish --publish-url https://test.pypi.org/legacy/"
+
+[tasks.clean]
+description = "Clean build artifacts and caches"
+run = """
+rm -rf build/ dist/ *.egg-info .pytest_cache .coverage htmlcov .mypy_cache
+find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+"""

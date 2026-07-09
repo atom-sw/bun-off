@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build and validate distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+
+      # pyproject.toml is the single source of truth for the version, so nothing
+      # otherwise stops `v0.2.0` being tagged on a tree that still says 0.1.0.
+      # An upload to PyPI cannot be undone: fail here instead.
+      - name: Verify the tag matches the project version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          project="$(uv version --short)"
+          if [ "$tag" != "$project" ]; then
+            echo "::error::tag v${tag} does not match pyproject.toml version ${project}"
+            exit 1
+          fi
+          echo "Releasing ${project}"
+
+      - run: uv build
+
+      # The README is the long description. A rendering failure surfaces only on
+      # upload, and cannot be fixed without burning the version number.
+      - name: Check long-description rendering
+        run: uv run --with twine --no-project twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Mints the short-lived OIDC token that PyPI trusted publishing exchanges
+      # for an upload token. No API token is stored as a secret.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: distributions
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

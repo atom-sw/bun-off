@@ -1,0 +1,84 @@
+meta:
+  name: sample-stack
+  description: Sample manifest exercising every artifact type.
+  version: "0.1.0"
+  author: bun-off tests
+
+rules:
+  - name: style
+    category: dev-essentials
+    globs:
+      - "**/*.md"
+      - "docs/**"
+
+skills:
+  - format
+
+slash_commands:
+  - lint
+
+mcp_servers:
+  - context7
+  - tldr
+
+permissions:
+  allow:
+    - { tool: read, pattern: "./src/**" }
+    - { tool: webfetch, pattern: "github.com" }
+  ask:
+    - { tool: bash, pattern: "git push *" }
+    - { tool: edit }
+  deny:
+    - { tool: bash, pattern: "curl *" }
+    - { tool: mcp, pattern: "secret__*", available_on: [claude] }
+
+agents:
+  - name: reviewer
+    description: Read-only code reviewer
+    model: haiku
+    mode: subagent
+    permissions:
+      allow:
+        - { tool: read }
+        - { tool: grep }
+      deny:
+        - { tool: edit }
+        - { tool: bash }
+        - { tool: bash, pattern: "git log *", available_on: [opencode] }
+
+settings:
+  claude:
+    outputStyle: Explanatory
+    cleanupPeriodDays: 14
+  opencode:
+    theme: tokyonight
+
+event_hooks:
+  - name: audit
+    event: after_bash
+    command: "logger boff: $BOFF_COMMAND"
+  - name: lint
+    event: after_edit
+    script: lint.sh
+
+plugins:
+  say-hi:
+    install:
+      claude:
+        source: local
+        path: plugins/say-hi
+      opencode:
+        source: local
+        path: plugins/say-hi
+      antigravity:
+        source: local
+        path: plugins/say-hi
+
+mise:
+  - mise/mise.toml
+
+hooks:
+  pre_install:
+    - script: say_pre
+  post_install:
+    - script: say_post

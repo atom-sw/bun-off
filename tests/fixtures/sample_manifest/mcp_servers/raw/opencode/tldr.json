@@ -1,0 +1,5 @@
+{
+  "type": "local",
+  "command": ["uvx", "llm-tldr"],
+  "enabled": true
+}

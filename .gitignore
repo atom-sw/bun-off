@@ -1,3 +1,23 @@
+*~
+
+# Emacs transients
+\#*\#
+.#*
+
+# boff bundles
+bundles/
+
+# boff-deployed output (dogfooding)
+.claude/
+.opencode/
+.config/
+.mcp.json
+opencode.json
+.tldr/
+.tldrignore
+
+dev/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,3 +236,55 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# BEGIN boff-managed
+/.agents/skills/doc-check/SKILL.md
+/.agents/skills/python-packaging/SKILL.md
+/.claude/hooks/_boff_dispatch.py
+/.claude/hooks/mise-install
+/.claude/hooks/ruff-format
+/.claude/rules/commit-conventions.md
+/.claude/rules/context-management.md
+/.claude/rules/documentation-style.md
+/.claude/rules/explore-then-code.md
+/.claude/rules/lint-exceptions.md
+/.claude/rules/match-project-conventions.md
+/.claude/rules/precise-context.md
+/.claude/rules/python-dev/docstrings.md
+/.claude/rules/python-dev/python-style.md
+/.claude/rules/python-dev/python-testing.md
+/.claude/rules/python-dev/python-toolchain.md
+/.claude/rules/python-dev/python-typing.md
+/.claude/rules/security-basics.md
+/.claude/rules/vcs-etiquette.md
+/.claude/rules/verify-your-work.md
+/.claude/rules/writing-docs.md
+/.claude/rules/writing-tests.md
+/.claude/skills/doc-check/SKILL.md
+/.claude/skills/python-packaging/SKILL.md
+/.config/mise/conf.d/boff-0.toml
+/.config/mise/conf.d/boff-1.toml
+/.opencode/commands/python-packaging.md
+/.opencode/hooks/mise-install
+/.opencode/plugins/boff-hooks.js
+/.opencode/rules/commit-conventions.md
+/.opencode/rules/context-management.md
+/.opencode/rules/documentation-style.md
+/.opencode/rules/explore-then-code.md
+/.opencode/rules/lint-exceptions.md
+/.opencode/rules/match-project-conventions.md
+/.opencode/rules/precise-context.md
+/.opencode/rules/python-dev/docstrings.md
+/.opencode/rules/python-dev/python-style.md
+/.opencode/rules/python-dev/python-testing.md
+/.opencode/rules/python-dev/python-toolchain.md
+/.opencode/rules/python-dev/python-typing.md
+/.opencode/rules/security-basics.md
+/.opencode/rules/vcs-etiquette.md
+/.opencode/rules/verify-your-work.md
+/.opencode/rules/writing-docs.md
+/.opencode/rules/writing-tests.md
+/.opencode/skills/doc-check/SKILL.md
+/.opencode/skills/python-packaging/SKILL.md
+/GEMINI.md
+# END boff-managed

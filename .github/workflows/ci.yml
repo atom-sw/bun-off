@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Full gate (typecheck, test, lint, format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # mise-action installs the toolchain pinned in .mise.toml, so CI runs the
+      # same task definitions a developer runs locally.
+      - uses: jdx/mise-action@v4
+
+      - run: mise run sync
+      - run: mise run check
+
+  compat:
+    name: Tests on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+
+      # The gate job pins 3.12 via .mise.toml. This job proves every interpreter
+      # in the `requires-python` range and the classifiers still passes.
+      - run: uv sync --all-extras
+      - run: uv run pytest
