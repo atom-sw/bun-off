@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-14
+
+### Fixed
+
+- `boff deploy` now writes its managed `.gitignore` block whenever the deploy directory is
+  inside a git repository, including a subfolder below the repository root. Previously it wrote
+  the block only when `.git` sat directly in the deploy directory, so deploying a bundle into a
+  subfolder left the generated files tracked instead of ignored. The block is written as a
+  nested `.gitignore` in the deploy directory, scoped to that subfolder.
+
 ## [0.1.1] - 2026-07-09
 
 ### Fixed
@@ -38,6 +48,7 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/atom-sw/bun-off/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/atom-sw/bun-off/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/atom-sw/bun-off/releases/tag/v0.1.0

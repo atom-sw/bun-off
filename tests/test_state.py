@@ -1,10 +1,13 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from boff.state import (
+    END_MARKER,
+    START_MARKER,
     DeployState,
     OwnerRecord,
     leaf_paths,
@@ -12,6 +15,7 @@ from boff.state import (
     reconcile,
     save_state,
     state_path,
+    update_workspace_gitignore,
 )
 from boff.types import (
     DeleteOperation,
@@ -141,3 +145,63 @@ def test_state_path_for_global_scope_roots_at_home(
     monkeypatch.setenv("HOME", str(tmp_path))
     scope = Scope(kind=ScopeKind.GLOBAL, workspace_root=None)
     assert state_path(scope) == tmp_path / ".boff" / "state.json"
+
+
+_OWNED = ".claude/settings.json"
+
+
+def _state_owning(rel: str) -> DeployState:
+    """State where the ``claude`` owner tracks a single workspace file."""
+    return DeployState(scopes={"workspace": {"claude": OwnerRecord(files=[rel])}})
+
+
+@pytest.mark.parametrize(
+    ("marker", "nested", "expect_block"),
+    [
+        pytest.param("dir", True, True, id="git_dir_at_repo_root_deploy_in_subfolder"),
+        pytest.param("file", True, True, id="git_file_worktree_deploy_in_subfolder"),
+        pytest.param("dir", False, True, id="git_dir_at_deploy_root"),
+        pytest.param(None, True, False, id="no_git_ancestor_writes_no_block"),
+    ],
+)
+def test_update_workspace_gitignore_detects_ancestor_work_tree(
+    tmp_path: Path,
+    make_scope: Callable[[Path], Scope],
+    marker: str | None,
+    nested: bool,
+    expect_block: bool,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    if marker == "dir":
+        (repo / ".git").mkdir()
+    elif marker == "file":
+        (repo / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+    deploy_dir = repo / "sub" if nested else repo
+    deploy_dir.mkdir(parents=True, exist_ok=True)
+
+    update_workspace_gitignore(_state_owning(_OWNED), make_scope(deploy_dir))
+
+    gitignore = deploy_dir / ".gitignore"
+    if expect_block:
+        content = gitignore.read_text(encoding="utf-8")
+        assert START_MARKER in content
+        assert END_MARKER in content
+        assert f"/{_OWNED}" in content
+    else:
+        assert not gitignore.exists() or START_MARKER not in gitignore.read_text()
+
+
+def test_update_workspace_gitignore_writes_nested_not_repo_root(
+    tmp_path: Path, make_scope: Callable[[Path], Scope]
+) -> None:
+    # A subfolder deploy writes its own nested .gitignore; the repo root is untouched.
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    sub = repo / "sub"
+    sub.mkdir()
+
+    update_workspace_gitignore(_state_owning(_OWNED), make_scope(sub))
+
+    assert START_MARKER in (sub / ".gitignore").read_text(encoding="utf-8")
+    assert not (repo / ".gitignore").exists()

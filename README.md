@@ -834,11 +834,16 @@ touches files Bun Off recorded for `opencode`.
 
 ### The managed `.gitignore` block
 
-Every deploy also lists the files it owns in the workspace's root `.gitignore`, inside a block
-delimited by `# BEGIN boff-managed` and `# END boff-managed`. Bun Off rewrites that block on each
-deploy and leaves the rest of the file untouched, so deployed artifacts stay out of version
-control while your own entries survive. Pass `--no-ignore` to not touch `.gitignore`. Bun Off does
-othing here when the workspace has no `.git` directory, and `boff check` never verifies the block.
+Every deploy also lists the files it owns in a `.gitignore` in the directory you deploy into,
+inside a block delimited by `# BEGIN boff-managed` and `# END boff-managed`. Bun Off rewrites that
+block on each deploy and leaves the rest of the file untouched, so deployed artifacts stay out of
+version control while your own entries survive. Pass `--no-ignore` to not touch `.gitignore`.
+
+Bun Off writes the block whenever the deploy directory sits inside a git work tree: the directory
+itself or any ancestor holds a `.git`. This means deploying into a **subfolder** of a repository
+still gets a `.gitignore`, written in that subfolder (a nested `.gitignore`). Its entries are
+anchored to the subfolder, so git ignores exactly the deployed files. Bun Off does nothing here
+when no ancestor is a git work tree, and `boff check` never verifies the block.
 
 Commit the block itself if you want the ignore rules shared; delete it and re-deploy to rebuild
 it.

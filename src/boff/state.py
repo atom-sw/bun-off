@@ -236,18 +236,33 @@ def save_state(state: DeployState, path: Path) -> None:
     path.write_text(dumps_json(payload), encoding="utf-8")
 
 
+def _inside_work_tree(root: Path) -> bool:
+    """Return True if ``root`` or any ancestor is a git work tree.
+
+    A git work tree is marked by ``.git`` (a directory in a normal clone, or a
+    file in a worktree or submodule), so this accepts either shape at any level.
+    """
+    return any((p / ".git").exists() for p in (root, *root.parents))
+
+
 def update_workspace_gitignore(state: DeployState, scope: Scope) -> None:
     """Update the workspace .gitignore with a managed block of boff's owned files.
 
     Gathers the exact file paths tracked by boff across all owners in ``scope``,
     and inserts or replaces a block demarcated by ``# BEGIN boff-managed`` and
-    ``# END boff-managed`` in the workspace's root ``.gitignore``. Does nothing
-    if the workspace is not under version control (lacks a ``.git`` directory).
+    ``# END boff-managed`` in the workspace directory's ``.gitignore``. Does
+    nothing unless the workspace directory or an ancestor is a git work tree.
+
+    The ``.gitignore`` is written in the workspace directory itself (the deploy
+    root), which may be a subfolder nested below the repository root. Its entries
+    are anchored (``/<path>``) to that directory, so git's nested-``.gitignore``
+    semantics apply them to the deployed files regardless of how deep the
+    subfolder sits.
     """
     if scope.kind != ScopeKind.WORKSPACE or scope.workspace_root is None:
         return
     root = scope.workspace_root
-    if not (root / ".git").exists():
+    if not _inside_work_tree(root):
         return
 
     skey = scope_key(scope)
