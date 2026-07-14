@@ -205,3 +205,96 @@ def test_update_workspace_gitignore_writes_nested_not_repo_root(
 
     assert START_MARKER in (sub / ".gitignore").read_text(encoding="utf-8")
     assert not (repo / ".gitignore").exists()
+
+
+def _git_repo(tmp_path: Path) -> Path:
+    """A directory that is a git work tree (has a ``.git`` dir)."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    return repo
+
+
+def _managed_block_lines(gitignore: Path) -> list[str]:
+    """Return the lines between the boff markers, or ``[]`` if there is no block."""
+    text = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    if START_MARKER not in text:
+        return []
+    return text.split(START_MARKER, 1)[1].split(END_MARKER, 1)[0].splitlines()
+
+
+def _merge_state(target: str, leaves: list[tuple[str, ...]]) -> DeployState:
+    """State where the ``claude`` owner MERGE-owns ``leaves`` of ``target``."""
+    return DeployState(scopes={"workspace": {"claude": OwnerRecord(merged={target: leaves})}})
+
+
+def test_gitignore_ignores_fully_boff_owned_merge_target(
+    tmp_path: Path, make_scope: Callable[[Path], Scope]
+) -> None:
+    # Every key in the file was written by boff, so the whole file is ignored.
+    repo = _git_repo(tmp_path)
+    target = ".mcp.json"
+    content = {"mcpServers": {"context7": {"command": "x"}}}
+    (repo / target).write_text(json.dumps(content), encoding="utf-8")
+
+    update_workspace_gitignore(_merge_state(target, leaf_paths(content)), make_scope(repo))
+
+    lines = _managed_block_lines(repo / ".gitignore")
+    assert f"/{target}" in lines
+    assert f"#/{target}" not in lines
+
+
+def test_gitignore_comments_partially_owned_merge_target(
+    tmp_path: Path, make_scope: Callable[[Path], Scope]
+) -> None:
+    # The file also holds a user key boff never wrote, so boff leaves it tracked
+    # and only comments it out.
+    repo = _git_repo(tmp_path)
+    target = ".claude/settings.json"
+    boff_block: dict[str, Any] = {"hooks": {"after_edit": []}}
+    (repo / ".claude").mkdir()
+    (repo / target).write_text(json.dumps({**boff_block, "model": "sonnet"}), encoding="utf-8")
+
+    update_workspace_gitignore(_merge_state(target, leaf_paths(boff_block)), make_scope(repo))
+
+    lines = _managed_block_lines(repo / ".gitignore")
+    assert f"#/{target}" in lines
+    assert f"/{target}" not in lines
+    assert any("Uncomment a line to ignore" in line for line in lines)
+
+
+def test_gitignore_mixes_overwrite_files_and_owned_merge_targets(
+    tmp_path: Path, make_scope: Callable[[Path], Scope]
+) -> None:
+    repo = _git_repo(tmp_path)
+    rule = ".claude/rules/style.md"
+    target = ".mcp.json"
+    content = {"mcpServers": {"context7": {"command": "x"}}}
+    (repo / target).write_text(json.dumps(content), encoding="utf-8")
+    state = DeployState(
+        scopes={
+            "workspace": {"claude": OwnerRecord(files=[rule], merged={target: leaf_paths(content)})}
+        }
+    )
+
+    update_workspace_gitignore(state, make_scope(repo))
+
+    lines = _managed_block_lines(repo / ".gitignore")
+    assert f"/{rule}" in lines
+    assert f"/{target}" in lines
+
+
+@pytest.mark.parametrize("content", [None, "{ not json"], ids=["missing_file", "malformed_json"])
+def test_gitignore_skips_unreadable_merge_target(
+    tmp_path: Path, make_scope: Callable[[Path], Scope], content: str | None
+) -> None:
+    # A merge target boff cannot read is neither ignored nor commented, and never raises.
+    repo = _git_repo(tmp_path)
+    target = ".mcp.json"
+    if content is not None:
+        (repo / target).write_text(content, encoding="utf-8")
+
+    update_workspace_gitignore(_merge_state(target, [("mcpServers", "context7")]), make_scope(repo))
+
+    lines = _managed_block_lines(repo / ".gitignore")
+    assert f"/{target}" not in lines
+    assert f"#/{target}" not in lines

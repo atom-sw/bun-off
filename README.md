@@ -845,6 +845,31 @@ still gets a `.gitignore`, written in that subfolder (a nested `.gitignore`). It
 anchored to the subfolder, so git ignores exactly the deployed files. Bun Off does nothing here
 when no ancestor is a git work tree, and `boff check` never verifies the block.
 
+Bun Off writes files two ways, and treats them differently in the block. Files it owns outright
+(rules, skills, commands, hooks, `GEMINI.md`) are always listed. Config files it *merges* into
+(`.claude/settings.json`, `.mcp.json`, `opencode.json`) may also hold keys you wrote, and
+`.gitignore` cannot ignore individual JSON keys, so Bun Off ignores a merged file only when it
+owns **every** key in it. When such a file also holds keys of your own, Bun Off leaves it tracked
+and lists it commented-out, with a note, so ignoring the whole file (and hiding your keys from git)
+stays an explicit opt-in:
+
+```gitignore
+# BEGIN boff-managed
+/.claude/rules/commit-conventions.md
+/.mcp.json
+#
+# These files also contain settings you edited, so boff leaves them tracked.
+# Uncomment a line to ignore the whole file (including your own keys):
+#/.claude/settings.json
+# END boff-managed
+```
+
+The classification is recomputed on every deploy: add your own key to a formerly all-Bun-Off file
+and the next deploy moves it from ignored to commented-out.
+
+The state directory `.boff/` never appears in this block. It self-ignores through its own
+`.boff/.gitignore` (a single `*`), so the whole directory stays out of git regardless.
+
 Commit the block itself if you want the ignore rules shared; delete it and re-deploy to rebuild
 it.
 

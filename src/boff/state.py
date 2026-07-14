@@ -245,6 +245,39 @@ def _inside_work_tree(root: Path) -> bool:
     return any((p / ".git").exists() for p in (root, *root.parents))
 
 
+def _partition_merge_targets(
+    scope_data: dict[str, OwnerRecord], root: Path
+) -> tuple[set[str], set[str]]:
+    """Split boff's MERGE targets into (fully owned, partially owned).
+
+    A MERGE target is *fully owned* when every JSON leaf currently in the file on
+    disk was written by boff, and *partially owned* when the file also holds keys
+    boff never wrote. Compares ``leaf_paths`` of the deployed file against the
+    key-paths recorded across all owners in ``scope_data``. A missing or
+    unparseable file is neither: it is skipped rather than raising.
+    """
+    owned: dict[str, set[KeyPath]] = {}
+    for rec in scope_data.values():
+        for target, leaves in rec.merged.items():
+            owned.setdefault(target, set()).update(leaves)
+
+    full: set[str] = set()
+    partial: set[str] = set()
+    for target, owned_leaves in owned.items():
+        try:
+            parsed = json.loads((root / target).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        file_leaves = set(leaf_paths(parsed))
+        if not file_leaves:
+            continue
+        if file_leaves <= owned_leaves:
+            full.add(target)
+        else:
+            partial.add(target)
+    return full, partial
+
+
 def update_workspace_gitignore(state: DeployState, scope: Scope) -> None:
     """Update the workspace .gitignore with a managed block of boff's owned files.
 
@@ -258,6 +291,12 @@ def update_workspace_gitignore(state: DeployState, scope: Scope) -> None:
     are anchored (``/<path>``) to that directory, so git's nested-``.gitignore``
     semantics apply them to the deployed files regardless of how deep the
     subfolder sits.
+
+    OVERWRITE files boff created are always listed. A MERGE target (``.mcp.json``,
+    ``.claude/settings.json``, ``opencode.json``) is listed only when boff owns
+    every key in it; a target that also holds user-authored keys is written
+    commented-out, so ignoring the whole file (and hiding those keys from git) is
+    an opt-in rather than a silent side effect.
     """
     if scope.kind != ScopeKind.WORKSPACE or scope.workspace_root is None:
         return
@@ -267,9 +306,13 @@ def update_workspace_gitignore(state: DeployState, scope: Scope) -> None:
 
     skey = scope_key(scope)
     scope_data = state.scopes.get(skey, {})
-    files: set[str] = set()
+    overwrite: set[str] = set()
     for owner_rec in scope_data.values():
-        files.update(owner_rec.files)
+        overwrite.update(owner_rec.files)
+
+    full, partial = _partition_merge_targets(scope_data, root)
+    active = sorted((overwrite | full) - partial)
+    commented = sorted(partial - overwrite)
 
     gitignore_path = root / ".gitignore"
     content = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
@@ -288,12 +331,18 @@ def update_workspace_gitignore(state: DeployState, scope: Scope) -> None:
         if not in_block:
             out.append(line)
 
-    if files:
+    if active or commented:
         if out and out[-1].strip():
             out.append("")
         out.append(START_MARKER)
-        for f in sorted(files):
-            out.append(f"/{f}")
+        out.extend(f"/{f}" for f in active)
+        if commented:
+            out.append("#")
+            out.append(
+                "# These files also contain settings you edited, so boff leaves them tracked."
+            )
+            out.append("# Uncomment a line to ignore the whole file (including your own keys):")
+            out.extend(f"#/{f}" for f in commented)
         out.append(END_MARKER)
 
     new_content = "\n".join(out) + "\n" if out else ""
