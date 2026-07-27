@@ -13,7 +13,7 @@ from typing import Any, ClassVar, Protocol
 
 import yaml
 
-from boff.artifacts import EventHook, MCPServer, Settings, Skill, SlashCommand
+from boff.artifacts import SKILL_FILENAME, EventHook, MCPServer, Settings, Skill, SlashCommand
 from boff.jsonutil import dumps_json
 from boff.platform_layout import PlatformLayout, require_workspace_root
 from boff.types import FileOperation, MergeStrategy, Operation, Scope
@@ -124,19 +124,30 @@ class PlatformAdapter:
 
     @renders(Skill)
     def _skill(self, artifact: Skill, *, platform: str, scope: Scope) -> list[Operation]:
-        """Write a skill to ``<config_root>/skills/<name>/SKILL.md``."""
+        """Write a skill, and any supporting files, under ``<config_root>/skills/<name>/``."""
         del platform
         root = require_workspace_root(scope)
-        # Both platforms discover skills as <name>/SKILL.md; a flat <name>.md is not loaded.
-        target = root / self.layout.config_root / "skills" / artifact.name / "SKILL.md"
-        return [
+        # Every platform discovers skills as <name>/SKILL.md; a flat <name>.md is not loaded.
+        skill_root = root / self.layout.config_root / "skills" / artifact.name
+        ops: list[Operation] = [
             FileOperation(
-                target=target,
+                target=skill_root / SKILL_FILENAME,
                 content=artifact.content,
                 merge=MergeStrategy.OVERWRITE,
                 description=f"{self.name} skill {artifact.name}",
             )
         ]
+        # Supporting files land beside SKILL.md so its relative links resolve as authored.
+        ops.extend(
+            FileOperation(
+                target=skill_root / extra.path,
+                content=extra.content,
+                merge=MergeStrategy.OVERWRITE,
+                description=f"{self.name} skill {artifact.name}/{extra.path}",
+            )
+            for extra in artifact.files
+        )
+        return ops
 
     @renders(SlashCommand)
     def _slash_command(

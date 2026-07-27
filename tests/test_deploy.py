@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -17,6 +17,7 @@ from boff.artifacts import (
     Rules,
     Settings,
     Skill,
+    SkillFile,
     SlashCommand,
 )
 from boff.deploy import (
@@ -30,6 +31,7 @@ from boff.deploy import (
 from boff.manifest import Manifest, ManifestMeta, Plugin, PluginInstall, load_manifest
 from boff.sources.local import LocalSpec
 from boff.types import FileOperation, Operation, Scope
+from tests.conftest import file_op
 
 DeployOps = Callable[[Manifest, str, Scope], list[Operation]]
 
@@ -202,6 +204,33 @@ def test_support_classifies_each_adapter_artifact_pair(
     platform: str, kind: type[Any], expected: Support
 ) -> None:
     assert _support(get_adapter(platform), kind) is expected
+
+
+@pytest.mark.parametrize("platform", adapter_names())
+def test_every_adapter_renders_a_skill_subtree_beside_its_entry_point(
+    platform: str, workspace_scope: Scope
+) -> None:
+    # SKILL.md links to its supporting files by relative path, so the subtree's own layout
+    # has to survive the render rather than being flattened into the skill directory.
+    relative = "references/contract.md"
+    body, support = "# body\n", b"# the contract\n"
+    skill = Skill(
+        name="s",
+        content=body,
+        files=(SkillFile(path=PurePosixPath(relative), content=support),),
+    )
+    adapter = get_adapter(platform)
+
+    ops = adapter.render(skill, platform=platform, scope=workspace_scope)
+
+    root = workspace_scope.workspace_root
+    assert root is not None
+    skill_root = root / adapter.layout.config_root / "skills" / skill.name
+    assert [file_op(op).target for op in ops] == [
+        skill_root / "SKILL.md",
+        skill_root / relative,
+    ]
+    assert [file_op(op).content for op in ops] == [body, support]
 
 
 @pytest.mark.parametrize("platform", adapter_names())

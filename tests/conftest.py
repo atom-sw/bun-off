@@ -7,7 +7,7 @@ flatteners, and the duplicated `META` prefix that previously drifted across test
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -26,6 +26,12 @@ META = "meta:\n  name: t\n  description: d\n"
 # The manifest folder and name inside the `bare_repo` fixture's repository.
 REMOTE_SUBDIR = "stack"
 REMOTE_NAME = "remote"
+
+# Supporting files of the `write_skill_dir` fixture's directory-form skill.
+SKILL_SUPPORT = {
+    "references/contract.md": "# the contract\n",
+    "templates/probe.py": "print('probe')\n",
+}
 
 
 @pytest.fixture(scope="session")
@@ -62,6 +68,32 @@ def write_manifest() -> Callable[..., Path]:
         root.mkdir(parents=True, exist_ok=True)
         (root / "boff.yaml").write_text(META + body)
         return root
+
+    return _write
+
+
+@pytest.fixture
+def write_skill_dir() -> Callable[..., Path]:
+    """Return a factory writing a directory-form skill under ``<root>/skills/<name>/``.
+
+    The default supporting files sit at two depths, so a test also pins that the subtree's
+    own layout survives the round trip rather than being flattened.
+    """
+
+    def _write(
+        root: Path,
+        name: str,
+        body: str = "# skill\n",
+        support: Mapping[str, str] = SKILL_SUPPORT,
+    ) -> Path:
+        skill_root = root / "skills" / name
+        skill_root.mkdir(parents=True, exist_ok=True)
+        (skill_root / "SKILL.md").write_text(body)
+        for rel, text in support.items():
+            target = skill_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        return skill_root
 
     return _write
 

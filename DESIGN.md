@@ -193,7 +193,7 @@ The core markdown/raw types:
 |---|---|---|
 | `Rule` | markdown string | `category: str \| None`, `globs: tuple[str, ...]` |
 | `Rules` | `rules: tuple[Rule, ...]` | — |
-| `Skill` | markdown string | — |
+| `Skill` | markdown string (`SKILL.md`) | `files: tuple[SkillFile, ...]` |
 | `SlashCommand` | markdown string | — |
 | `MCPServer` | `raw: dict[str, dict]` (per-platform JSON) | — |
 | `Agent` | markdown string (prompt body) | `description`, `model: str \| dict[str, str] \| None`, `mode`, `permissions` |
@@ -205,6 +205,23 @@ all of them. A platform that reads a rules *directory* (Claude, OpenCode) render
 dispatches on artifact type, so each adapter simply declares which shape it can render, and the
 other is skipped with no branching in the deploy engine. `EventHooks` uses the same aggregate
 pattern for a different reason: its glue is per-platform, not per-hook.
+
+**A skill is one file or a whole folder.** Every platform discovers a skill as
+`<name>/SKILL.md`, and a real skill often carries more: reference documents it loads only when
+needed, templates the assistant copies. So `skills/<name>/` in a manifest folder ships its whole
+subtree, with `SKILL.md` in `Skill.content` and everything else in `Skill.files` as
+`SkillFile(path, content: bytes)`, rendered beside the entry point so the relative links inside
+`SKILL.md` resolve as authored. `skills/<name>.md` stays valid for a skill that needs nothing
+else, and the loader picks the form from what is on disk rather than from a schema key: the two
+spellings are the same artifact, not two kinds of it. Declaring both for one name is an error,
+because a silent precedence rule would hide a typo.
+
+This costs the rest of the system nothing. `FileOperation.content` was already `str | bytes`,
+the executor already wrote bytes, and state tracking already recorded and reconciled each file
+individually — so a supporting file dropped from a bundle is deleted on the next deploy and its
+emptied directory pruned, with no new machinery. It is also platform-neutral: supporting files
+are read by the *assistant* at run time with its own file tools, not parsed by any platform's
+config loader, so all three platforms gain the feature through the one shared `_skill` renderer.
 
 `MCPServer.raw` is a map from platform name to the verbatim JSON object that platform expects.
 This is a deliberate escape hatch: MCP server configuration is platform-specific and changes

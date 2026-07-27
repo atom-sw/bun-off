@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 
 import yaml
@@ -13,6 +13,7 @@ import yaml
 from boff.artifacts import (
     NORMALIZED_EVENTS,
     RESERVED_KEYS,
+    SKILL_FILENAME,
     Action,
     Agent,
     Artifact,
@@ -25,6 +26,7 @@ from boff.artifacts import (
     Rules,
     Settings,
     Skill,
+    SkillFile,
     SlashCommand,
 )
 from boff.artifacts.permissions import CANONICAL_TOOLS
@@ -216,6 +218,43 @@ def _load_rules(root: Path, entries: list[Any]) -> tuple[Rule, ...]:
             )
         )
     return tuple(rules)
+
+
+def _load_skill_files(skill_root: Path) -> tuple[SkillFile, ...]:
+    """Read every file under a skill directory except its ``SKILL.md`` entry point."""
+    entry = skill_root / SKILL_FILENAME
+    return tuple(
+        SkillFile(path=PurePosixPath(src.relative_to(skill_root)), content=src.read_bytes())
+        for src in sorted(p for p in skill_root.rglob("*") if p.is_file() and p != entry)
+    )
+
+
+def _load_skills(root: Path, entries: list[Any]) -> tuple[Skill, ...]:
+    """Load skill entries, accepting either a single markdown file or a skill directory.
+
+    A skill directory ships supporting files (references, templates) alongside its
+    ``SKILL.md``; nothing under it is filtered out, so the author decides what ships.
+    """
+    skills: list[Skill] = []
+    for entry in entries:
+        name, available_on = _entry_name_and_available_on(entry)
+        md_path = root / SKILLS_DIR / f"{name}.md"
+        skill_root = root / SKILLS_DIR / name
+        if skill_root.is_dir() and md_path.is_file():
+            raise ValueError(
+                f"skill '{name}' is both a file and a directory: {md_path} and {skill_root}"
+            )
+        if skill_root.is_dir():
+            entry_path = skill_root / SKILL_FILENAME
+            if not entry_path.is_file():
+                raise FileNotFoundError(f"skill directory has no entry point: {entry_path}")
+            content, files = entry_path.read_text(), _load_skill_files(skill_root)
+        elif md_path.is_file():
+            content, files = md_path.read_text(), ()
+        else:
+            raise FileNotFoundError(f"{SKILLS_DIR} content not found: {md_path}")
+        skills.append(Skill(name=name, content=content, available_on=available_on, files=files))
+    return tuple(skills)
 
 
 class _SimpleArtifactFactory[T](Protocol):
@@ -547,7 +586,7 @@ def _load_own(root: Path, raw: dict[str, Any]) -> Manifest:
     """Parse one manifest folder into a :class:`Manifest`, recording (not resolving) ``extends``."""
     meta = _load_meta(raw)
     rules = _load_rules(root, raw.get("rules") or [])
-    skills = _load_simple_artifacts(root, SKILLS_DIR, raw.get("skills") or [], Skill)
+    skills = _load_skills(root, raw.get("skills") or [])
     slash_commands = _load_simple_artifacts(
         root, SLASH_COMMANDS_DIR, raw.get("slash_commands") or [], SlashCommand
     )

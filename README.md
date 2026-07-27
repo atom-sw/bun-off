@@ -53,7 +53,7 @@ A manifest is a **folder** containing `boff.yaml` and one subdirectory per artif
 my-stack/
   boff.yaml
   rules/            # one <name>.md per listed rule
-  skills/           # one <name>.md per listed skill
+  skills/           # one <name>.md per listed skill, or a <name>/ folder holding SKILL.md
   slash_commands/   # one <name>.md per listed command
   agents/           # one <name>.md per listed agent (system-prompt body)
   mcp_servers/
@@ -330,8 +330,17 @@ Two caveats:
 
 ### Skills
 
-Skills are markdown files that teach the assistant a repeatable workflow. Each name resolves to
-`skills/<name>.md`.
+Skills are markdown files that teach the assistant a repeatable workflow. A skill takes either
+of two forms on disk, and Bun Off picks the one it finds:
+
+```
+skills/
+  quick-fix.md              a skill that is just its own text
+  cmon-monitor/             a skill that ships supporting files
+    SKILL.md                the entry point; the name is fixed
+    references/contract.md  loaded only when the skill needs it
+    templates/monitor.py    a file the assistant copies
+```
 
 | Platform | Path |
 |---|---|
@@ -339,8 +348,30 @@ Skills are markdown files that teach the assistant a repeatable workflow. Each n
 | OpenCode | `.opencode/skills/<name>/SKILL.md` |
 | Antigravity CLI | `.agents/skills/<name>/SKILL.md` |
 
-Antigravity requires `name` and `description` frontmatter in every `SKILL.md`: it reads the
-description to decide whether to activate the skill.
+Both forms are listed the same way, by name:
+
+```yaml
+skills:
+  - quick-fix
+  - cmon-monitor
+```
+
+Everything under a skill folder is deployed verbatim beside its `SKILL.md`, keeping its own
+layout, so `.claude/skills/cmon-monitor/references/contract.md` is where a relative link in
+`SKILL.md` expects it. Nothing is filtered out: what the folder holds is what ships. Supporting
+files are read by the assistant with its own file tools rather than loaded by the platform, so
+they work identically on all three platforms.
+
+Two things to know:
+
+- Antigravity requires `name` and `description` frontmatter in every `SKILL.md`: it reads the
+  description to decide whether to activate the skill.
+- Declaring a skill in both forms at once (`skills/<name>.md` *and* `skills/<name>/`) is an
+  error rather than a silent preference for one, since it is almost always a leftover file.
+
+Removing a supporting file from a bundle removes the deployed copy on the next `boff deploy`,
+and prunes the directory if it empties. `boff check` verifies every supporting file, so an
+edited template is reported as drift.
 
 ### Slash commands
 

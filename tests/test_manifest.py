@@ -4,9 +4,11 @@ from pathlib import Path
 import pytest
 
 from boff.manifest import load_manifest
+from tests.conftest import SKILL_SUPPORT
 
-# Factory signature for the `write_manifest` fixture (see conftest.py).
+# Factory signatures for the `write_manifest` and `write_skill_dir` fixtures (see conftest.py).
 WriteManifest = Callable[..., Path]
+WriteSkillDir = Callable[..., Path]
 
 
 def test_load_manifest_counts(sample_manifest: Path) -> None:
@@ -42,6 +44,57 @@ def test_manifest_rejects_non_list_globs(tmp_path: Path, write_manifest: WriteMa
     (tmp_path / "rules" / "r.md").write_text("body")
     write_manifest(tmp_path, 'rules:\n  - name: r\n    globs: "**/*.py"\n')
     with pytest.raises(ValueError, match="globs"):
+        load_manifest(tmp_path)
+
+
+def test_flat_and_directory_skills_load_the_same_body(
+    tmp_path: Path, write_manifest: WriteManifest, write_skill_dir: WriteSkillDir
+) -> None:
+    body = "# shared body\n"
+    flat, nested = tmp_path / "flat", tmp_path / "nested"
+    (flat / "skills").mkdir(parents=True)
+    (flat / "skills" / "s.md").write_text(body)
+    write_skill_dir(nested, "s", body=body)
+    for root in (flat, nested):
+        write_manifest(root, "skills:\n  - s\n")
+    assert load_manifest(flat).skills[0].content == load_manifest(nested).skills[0].content == body
+
+
+def test_directory_skill_carries_its_supporting_files(
+    tmp_path: Path, write_manifest: WriteManifest, write_skill_dir: WriteSkillDir
+) -> None:
+    write_skill_dir(tmp_path, "s")
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    skill = load_manifest(tmp_path).skills[0]
+    assert {str(f.path): f.content.decode() for f in skill.files} == SKILL_SUPPORT
+
+
+def test_flat_skill_carries_no_supporting_files(
+    tmp_path: Path, write_manifest: WriteManifest
+) -> None:
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "skills" / "s.md").write_text("body")
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    assert load_manifest(tmp_path).skills[0].files == ()
+
+
+def test_skill_directory_without_an_entry_point_raises(
+    tmp_path: Path, write_manifest: WriteManifest
+) -> None:
+    (tmp_path / "skills" / "s" / "references").mkdir(parents=True)
+    (tmp_path / "skills" / "s" / "references" / "contract.md").write_text("body")
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    with pytest.raises(FileNotFoundError, match="no entry point"):
+        load_manifest(tmp_path)
+
+
+def test_skill_present_as_both_file_and_directory_raises(
+    tmp_path: Path, write_manifest: WriteManifest, write_skill_dir: WriteSkillDir
+) -> None:
+    write_skill_dir(tmp_path, "s")
+    (tmp_path / "skills" / "s.md").write_text("body")
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    with pytest.raises(ValueError, match="both a file and a directory"):
         load_manifest(tmp_path)
 
 

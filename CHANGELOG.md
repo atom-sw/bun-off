@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-27
+
+### Added
+
+- Skills can ship supporting files. A skill listed in `skills:` may now be a `skills/<name>/`
+  folder holding `SKILL.md` plus its own subtree, instead of a single `skills/<name>.md`. The
+  whole subtree deploys beside the entry point, keeping its layout, so the references and
+  templates a skill links to land where `SKILL.md` expects them. Supporting files are read by
+  the assistant rather than parsed by the platform, so this works identically on Claude Code,
+  OpenCode, and the Antigravity CLI. A skill written as a single markdown file keeps working
+  unchanged, and `boff check` verifies every supporting file while `boff deploy` removes the
+  ones a bundle stops shipping.
+
 ## [0.2.0] - 2026-07-27
 
 ### Added
@@ -85,7 +98,8 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/atom-sw/bun-off/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/atom-sw/bun-off/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/atom-sw/bun-off/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/atom-sw/bun-off/compare/v0.1.1...v0.1.2

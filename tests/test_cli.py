@@ -1,11 +1,15 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from boff import verify as verify_module
 from boff.cli import ExitCode, main
-from tests.conftest import REMOTE_NAME, REMOTE_SUBDIR
+from tests.conftest import REMOTE_NAME, REMOTE_SUBDIR, SKILL_SUPPORT
+
+# The directory-form skill built by the `skill_bundle` fixture.
+SKILL_NAME = "s"
 
 
 def test_deploy_dry_run_prints_op_count(
@@ -704,3 +708,71 @@ def test_removing_every_manifest_is_a_usage_error(
 
     assert rc == ExitCode.USAGE
     assert "boff clean" in capsys.readouterr().err
+
+
+@pytest.fixture
+def skill_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    write_manifest: Callable[..., Path],
+    write_skill_dir: Callable[..., Path],
+) -> tuple[Path, Path]:
+    """A bundle holding one directory-form skill, plus a fresh workspace as cwd."""
+    bundle = tmp_path / "bundle"
+    write_skill_dir(bundle, SKILL_NAME)
+    write_manifest(bundle, f"skills:\n  - {SKILL_NAME}\n")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    return bundle, workspace
+
+
+def test_deploying_a_directory_skill_writes_its_supporting_files(
+    skill_bundle: tuple[Path, Path],
+) -> None:
+    bundle, workspace = skill_bundle
+
+    assert main(["deploy", str(bundle), "--platform", "claude"]) == ExitCode.OK
+
+    deployed = workspace / ".claude" / "skills" / SKILL_NAME
+    assert (deployed / "SKILL.md").read_text() == (
+        bundle / "skills" / SKILL_NAME / "SKILL.md"
+    ).read_text()
+    assert {rel: (deployed / rel).read_text() for rel in SKILL_SUPPORT} == SKILL_SUPPORT
+
+
+def test_redeploying_without_a_supporting_file_removes_it(
+    skill_bundle: tuple[Path, Path],
+) -> None:
+    bundle, workspace = skill_bundle
+    dropped = next(iter(SKILL_SUPPORT))
+    assert main(["deploy", str(bundle), "--platform", "claude"]) == ExitCode.OK
+
+    (bundle / "skills" / SKILL_NAME / dropped).unlink()
+    assert main(["deploy", str(bundle), "--platform", "claude"]) == ExitCode.OK
+
+    deployed = workspace / ".claude" / "skills" / SKILL_NAME
+    assert not (deployed / dropped).exists()
+    # The emptied subdirectory is pruned too, so no orphaned `references/` is left behind.
+    assert not (deployed / dropped).parent.exists()
+    assert (deployed / "SKILL.md").is_file()
+
+
+@pytest.mark.usefixtures("binary_on_path")
+def test_check_reports_drift_when_a_supporting_file_is_edited(
+    skill_bundle: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    bundle, workspace = skill_bundle
+    edited = next(iter(SKILL_SUPPORT))
+    assert main(["deploy", str(bundle), "--platform", "claude"]) == ExitCode.OK
+    capsys.readouterr()
+
+    target = workspace / ".claude" / "skills" / SKILL_NAME / edited
+    target.write_text(target.read_text() + "hand-edited\n")
+    rc = main(["check", str(bundle), "--platform", "claude"])
+
+    out = capsys.readouterr().out
+    assert rc == ExitCode.ERROR
+    # The finding must name the supporting file, not just the skill it belongs to.
+    assert f"drifted   skill {SKILL_NAME}" in out
+    assert str(target.relative_to(workspace)) in out
