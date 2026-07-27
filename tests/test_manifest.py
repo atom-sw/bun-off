@@ -69,6 +69,46 @@ def test_directory_skill_carries_its_supporting_files(
     assert {str(f.path): f.content.decode() for f in skill.files} == SKILL_SUPPORT
 
 
+@pytest.mark.parametrize(
+    ("relative", "shipped"),
+    [
+        pytest.param("templates/__pycache__/probe.cpython-312.pyc", False, id="pycache"),
+        pytest.param("templates/probe.pyc", False, id="loose-pyc"),
+        pytest.param("templates/probe.pyo", False, id="loose-pyo"),
+        pytest.param("references/.DS_Store", False, id="ds-store"),
+        pytest.param(".git/config", False, id="nested-git"),
+        pytest.param(".pytest_cache/CACHEDIR.TAG", False, id="pytest-cache"),
+        pytest.param("templates/.probe.py.swp", False, id="vim-swap"),
+        pytest.param("templates/probe.py~", False, id="editor-backup"),
+        pytest.param("templates/probe.py.orig", False, id="merge-leftover"),
+        pytest.param("templates/probe.py", True, id="source-file"),
+        pytest.param("references/contract.md", True, id="reference"),
+        # Only the excluded *directory* names are special: a normal file living under a
+        # similarly named folder, or one merely mentioning them, still ships.
+        pytest.param("references/pycache-notes.md", True, id="lookalike-name"),
+        pytest.param("assets/logo.png", True, id="binary-asset"),
+    ],
+)
+def test_skill_folder_skips_build_droppings_and_ships_everything_else(
+    tmp_path: Path,
+    write_manifest: WriteManifest,
+    write_skill_dir: WriteSkillDir,
+    relative: str,
+    shipped: bool,
+) -> None:
+    # Running a template's own tests once leaves a .pyc behind. Those files are untracked, so
+    # a bundle fetched from git never shows them: only a local manifest path would ship them.
+    skill_root = write_skill_dir(tmp_path, "s", support={})
+    extra = skill_root / relative
+    extra.parent.mkdir(parents=True, exist_ok=True)
+    extra.write_bytes(b"x")
+    write_manifest(tmp_path, "skills:\n  - s\n")
+
+    files = load_manifest(tmp_path).skills[0].files
+
+    assert [str(f.path) for f in files] == ([relative] if shipped else [])
+
+
 def test_flat_skill_carries_no_supporting_files(
     tmp_path: Path, write_manifest: WriteManifest
 ) -> None:

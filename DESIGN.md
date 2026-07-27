@@ -223,6 +223,19 @@ emptied directory pruned, with no new machinery. It is also platform-neutral: su
 are read by the *assistant* at run time with its own file tools, not parsed by any platform's
 config loader, so all three platforms gain the feature through the one shared `_skill` renderer.
 
+**A skill folder is not quite verbatim.** The first version of this shipped the subtree
+unfiltered, on the same "the author decides what ships" reasoning that governs
+`sources/local.py`. That was wrong here, and wrong within a day: running a template's own test
+script inside the folder wrote `templates/__pycache__/*.pyc`, and the next deploy copied it to
+all three platforms. The asymmetry is what makes it a trap. Untracked files never reach a
+bundle fetched from git, so the droppings are invisible to everyone except someone deploying
+from a **local** path — which is precisely what a bundle author does while iterating. The
+author is therefore the one person who cannot see the problem, and their users are the ones who
+get the stale bytecode. So `skill.ships` skips a fixed set of build and editor droppings
+(`EXCLUDED_DIRS` matched against any parent component, `EXCLUDED_GLOBS` against the filename)
+and passes everything else through. `sources/local.py` keeps mirroring unfiltered: it copies an
+explicitly named subtree to the workspace root, rather than a folder that tooling runs inside.
+
 `MCPServer.raw` is a map from platform name to the verbatim JSON object that platform expects.
 This is a deliberate escape hatch: MCP server configuration is platform-specific and changes
 frequently, so rather than trying to model it abstractly, the manifest author supplies the raw

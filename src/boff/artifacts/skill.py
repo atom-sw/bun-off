@@ -12,6 +12,27 @@ Every supported platform discovers a skill as ``<name>/SKILL.md``, so the manife
 the renderers agree on the one name.
 """
 
+EXCLUDED_DIRS = frozenset(
+    {"__pycache__", ".git", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".ipynb_checkpoints"}
+)
+"""Directories a skill folder collects but never means to ship, skipped at any depth."""
+
+EXCLUDED_GLOBS = ("*.py[co]", ".DS_Store", "Thumbs.db", "*.sw[po]", "*~", "*.orig", "*.rej")
+"""Filename patterns of build and editor droppings, matched against the file's own name."""
+
+
+def ships(path: PurePosixPath) -> bool:
+    """Return True if a path under a skill folder belongs in the deployed skill.
+
+    Tooling run inside a skill folder leaves artifacts behind: running a template's tests once
+    writes ``templates/__pycache__/*.pyc``. Those are invisible when a bundle is fetched from
+    git, since they are untracked, so a local manifest path would otherwise copy them into
+    every user's skills directory without the author ever seeing them.
+    """
+    if EXCLUDED_DIRS.intersection(path.parts[:-1]):
+        return False
+    return not any(path.match(pattern) for pattern in EXCLUDED_GLOBS)
+
 
 @dataclass(frozen=True)
 class SkillFile:

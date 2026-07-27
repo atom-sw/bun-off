@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -28,6 +29,7 @@ from boff.artifacts import (
     Skill,
     SkillFile,
     SlashCommand,
+    ships,
 )
 from boff.artifacts.permissions import CANONICAL_TOOLS
 from boff.errors import ManifestError
@@ -36,6 +38,8 @@ from boff.sources.base import PluginSpec
 from boff.sources.local import LocalSpec
 
 # On-disk manifest-folder layout: the file and subdirectory names a manifest folder uses.
+_log = logging.getLogger(__name__)
+
 MANIFEST_FILENAME = "boff.yaml"
 RULES_DIR = "rules"
 SKILLS_DIR = "skills"
@@ -221,12 +225,20 @@ def _load_rules(root: Path, entries: list[Any]) -> tuple[Rule, ...]:
 
 
 def _load_skill_files(skill_root: Path) -> tuple[SkillFile, ...]:
-    """Read every file under a skill directory except its ``SKILL.md`` entry point."""
+    """Read the shippable files under a skill directory, minus its ``SKILL.md`` entry point.
+
+    Build and editor droppings are skipped (see :func:`boff.artifacts.skill.ships`); everything
+    else ships, so the author still decides what a skill carries.
+    """
     entry = skill_root / SKILL_FILENAME
-    return tuple(
-        SkillFile(path=PurePosixPath(src.relative_to(skill_root)), content=src.read_bytes())
-        for src in sorted(p for p in skill_root.rglob("*") if p.is_file() and p != entry)
-    )
+    files: list[SkillFile] = []
+    for src in sorted(p for p in skill_root.rglob("*") if p.is_file() and p != entry):
+        rel = PurePosixPath(src.relative_to(skill_root))
+        if not ships(rel):
+            _log.debug("skipping %s: not a shippable skill file", src)
+            continue
+        files.append(SkillFile(path=rel, content=src.read_bytes()))
+    return tuple(files)
 
 
 def _load_skills(root: Path, entries: list[Any]) -> tuple[Skill, ...]:

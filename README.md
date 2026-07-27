@@ -358,16 +358,20 @@ skills:
 
 Everything under a skill folder is deployed verbatim beside its `SKILL.md`, keeping its own
 layout, so `.claude/skills/cmon-monitor/references/contract.md` is where a relative link in
-`SKILL.md` expects it. Nothing is filtered out: what the folder holds is what ships. Supporting
-files are read by the assistant with its own file tools rather than loaded by the platform, so
-they work identically on all three platforms.
+`SKILL.md` expects it. Supporting files are read by the assistant with its own file tools
+rather than loaded by the platform, so they work identically on all three platforms.
 
-Two things to know:
+Three things to know:
 
 - Antigravity requires `name` and `description` frontmatter in every `SKILL.md`: it reads the
   description to decide whether to activate the skill.
 - Declaring a skill in both forms at once (`skills/<name>.md` *and* `skills/<name>/`) is an
   error rather than a silent preference for one, since it is almost always a leftover file.
+- Build and editor droppings are skipped, so tooling run inside a skill folder does not end up
+  in the deployed skill: the `__pycache__`, `.git`, `.pytest_cache`, `.ruff_cache`,
+  `.mypy_cache`, and `.ipynb_checkpoints` directories at any depth, and the files `*.pyc`,
+  `*.pyo`, `.DS_Store`, `Thumbs.db`, `*.swp`, `*.swo`, `*~`, `*.orig`, and `*.rej`. Everything
+  else ships, so the author still decides what a skill carries.
 
 Removing a supporting file from a bundle removes the deployed copy on the next `boff deploy`,
 and prunes the directory if it empties. `boff check` verifies every supporting file, so an

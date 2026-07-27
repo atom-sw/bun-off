@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-27
+
+### Fixed
+
+- A skill folder no longer ships build and editor droppings. Tooling run inside a skill folder
+  leaves files behind — running a template's own tests writes `templates/__pycache__/*.pyc` —
+  and 0.3.0 deployed them to every platform. They are untracked, so a bundle fetched from a git
+  reference never carried them: only a local manifest path did, which is the path a bundle
+  author uses while iterating, so the author was the last to notice. The `__pycache__`, `.git`,
+  `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, and `.ipynb_checkpoints` directories are now
+  skipped at any depth, along with `*.pyc`, `*.pyo`, `.DS_Store`, `Thumbs.db`, `*.swp`, `*.swo`,
+  `*~`, `*.orig`, and `*.rej`. Everything else still ships. Files deployed by 0.3.0 are removed
+  on the next `boff deploy`, like any other supporting file a bundle stops shipping.
+- `boff.artifacts.__all__` listed `SKILL_FILENAME` and `SkillFile` twice.
+
 ## [0.3.0] - 2026-07-27
 
 ### Added
@@ -98,7 +113,8 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/atom-sw/bun-off/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/atom-sw/bun-off/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/atom-sw/bun-off/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/atom-sw/bun-off/compare/v0.1.2...v0.1.3
