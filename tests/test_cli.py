@@ -416,3 +416,291 @@ def test_deploy_unresolvable_url_exits_clean(
     assert rc == ExitCode.ERROR
     assert "cannot tell where the repository ends" in err
     assert "Traceback" not in err
+
+
+# --- Multi-manifest stacks: `deploy A B`, `--add`, `--remove` -------------------------------
+
+
+def _bundle(root: Path, name: str, rules: dict[str, str]) -> Path:
+    """Create a manifest folder named ``name`` whose ``rules`` map rule name to body."""
+    (root / "rules").mkdir(parents=True, exist_ok=True)
+    for rule, body in rules.items():
+        (root / "rules" / f"{rule}.md").write_text(body)
+    listing = "".join(f"  - {rule}\n" for rule in rules)
+    (root / "boff.yaml").write_text(
+        f"meta:\n  name: {name}\n  description: {name}\nrules:\n{listing}"
+    )
+    return root
+
+
+def _rule_file(project: Path, name: str) -> Path:
+    """Where the claude adapter writes rule ``name`` in ``project``."""
+    return project / ".claude" / "rules" / f"{name}.md"
+
+
+def _recorded_stack(project: Path) -> list[str]:
+    """The manifest references recorded in ``project``'s deploy state."""
+    state = json.loads((project / ".boff" / "state.json").read_text())
+    return state["stacks"]["workspace"]
+
+
+def _meta_name(letter: str) -> str:
+    """The ``meta.name`` of a test bundle: distinctive enough to grep for in CLI output."""
+    return f"bundle-{letter}"
+
+
+@pytest.fixture
+def stacked_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> tuple[Path, Path, Path, Path]:
+    """A workspace with bundles a and b deployed to claude; returns (project, a, b, c).
+
+    Bundle c is created but not deployed, so a test can add it. All three define the rule
+    ``shared`` with a distinct body, which is what makes last-wins observable.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    bundles = {
+        letter: _bundle(
+            tmp_path / letter,
+            _meta_name(letter),
+            {"shared": f"from-{letter}", f"only_{letter}": letter},
+        )
+        for letter in ("a", "b", "c")
+    }
+    monkeypatch.chdir(project)
+    assert main(["deploy", str(bundles["a"]), str(bundles["b"]), "--platform", "claude"]) == 0
+    capsys.readouterr()
+    return project, bundles["a"], bundles["b"], bundles["c"]
+
+
+def test_deploy_merges_several_manifests_with_the_last_winning(
+    stacked_workspace: tuple[Path, Path, Path, Path],
+) -> None:
+    project, _, bundle_b, _ = stacked_workspace
+
+    assert _rule_file(project, "only_a").is_file()
+    assert _rule_file(project, "only_b").is_file()
+    assert (
+        _rule_file(project, "shared").read_text() == (bundle_b / "rules" / "shared.md").read_text()
+    )
+
+
+def test_the_same_relative_reference_resolves_per_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Manifest references are resolved through a memo, so the same relative spelling used from
+    # two directories must not collapse onto whichever one was resolved first.
+    ref = "../bundle"
+    for letter in ("a", "b"):
+        workspace = tmp_path / letter
+        _bundle(workspace / "bundle", _meta_name(letter), {f"only_{letter}": letter})
+        (workspace / "project").mkdir()
+        monkeypatch.chdir(workspace / "project")
+        assert main(["deploy", ref, "--platform", "claude"]) == 0
+        capsys.readouterr()
+        assert _rule_file(workspace / "project", f"only_{letter}").is_file()
+
+
+def test_deploy_records_the_stack_in_state(
+    stacked_workspace: tuple[Path, Path, Path, Path],
+) -> None:
+    project, bundle_a, bundle_b, _ = stacked_workspace
+    assert _recorded_stack(project) == [str(bundle_a), str(bundle_b)]
+
+
+def test_deploy_warns_when_two_manifests_define_the_same_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    shared = "shared"
+    project = tmp_path / "project"
+    project.mkdir()
+    first = _bundle(tmp_path / "first", "first", {shared: "one"})
+    second = _bundle(tmp_path / "second", "second", {shared: "two"})
+    monkeypatch.chdir(project)
+
+    assert main(["deploy", str(first), str(second), "--platform", "claude"]) == 0
+
+    err = capsys.readouterr().err
+    assert f"rules '{shared}'" in err
+    assert "overrides an earlier definition" in err
+
+
+def test_deploy_add_appends_to_the_recorded_stack(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    project, bundle_a, bundle_b, bundle_c = stacked_workspace
+
+    # No --platform: it falls back to the platform already recorded for this directory.
+    assert main(["deploy", "--add", str(bundle_c)]) == 0
+    capsys.readouterr()
+
+    assert _recorded_stack(project) == [str(bundle_a), str(bundle_b), str(bundle_c)]
+    for rule in ("only_a", "only_b", "only_c"):
+        assert _rule_file(project, rule).is_file()
+    assert (
+        _rule_file(project, "shared").read_text() == (bundle_c / "rules" / "shared.md").read_text()
+    )
+
+
+def test_deploy_remove_drops_a_manifest_and_reclaims_its_files(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    project, bundle_a, bundle_b, _ = stacked_workspace
+
+    assert main(["deploy", "--remove", str(bundle_b)]) == 0
+    capsys.readouterr()
+
+    assert _recorded_stack(project) == [str(bundle_a)]
+    assert not _rule_file(project, "only_b").exists()
+    assert _rule_file(project, "only_a").is_file()
+    # `shared` reverts to bundle a's body now that b no longer overrides it.
+    assert (
+        _rule_file(project, "shared").read_text() == (bundle_a / "rules" / "shared.md").read_text()
+    )
+
+
+def test_deploy_add_of_an_already_deployed_manifest_moves_it_last(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    project, bundle_a, bundle_b, _ = stacked_workspace
+
+    assert main(["deploy", "--add", str(bundle_a)]) == 0
+
+    err = capsys.readouterr().err
+    assert "already deployed" in err
+    assert _recorded_stack(project) == [str(bundle_b), str(bundle_a)]
+    assert (
+        _rule_file(project, "shared").read_text() == (bundle_a / "rules" / "shared.md").read_text()
+    )
+
+
+def test_deploy_with_no_arguments_redeploys_the_recorded_stack(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    project, bundle_a, bundle_b, _ = stacked_workspace
+    _rule_file(project, "only_a").unlink()
+
+    assert main(["deploy"]) == 0
+    capsys.readouterr()
+
+    assert _rule_file(project, "only_a").is_file()
+    assert _recorded_stack(project) == [str(bundle_a), str(bundle_b)]
+
+
+def test_check_with_no_manifest_verifies_the_recorded_stack(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, bundle_a, bundle_b, _ = stacked_workspace
+
+    assert main(["check", "--no-probe"]) == ExitCode.OK
+
+    # The stack's metadata headers name every member, in merge order.
+    out = capsys.readouterr().out
+    assert _meta_name(bundle_a.name) in out
+    assert _meta_name(bundle_b.name) in out
+
+
+def test_check_reports_drift_against_the_recorded_stack(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    project, _, _, _ = stacked_workspace
+    _rule_file(project, "only_a").unlink()
+
+    assert main(["check", "--no-probe"]) == ExitCode.ERROR
+    assert "missing" in capsys.readouterr().out
+
+
+def test_clean_forgets_the_recorded_stack(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, _, _, bundle_c = stacked_workspace
+
+    assert main(["clean"]) == 0
+    capsys.readouterr()
+
+    # With the stack forgotten, --add has nothing to build on rather than resurrecting a and b.
+    assert main(["deploy", "--add", str(bundle_c)]) == ExitCode.USAGE
+    assert "no deployed stack recorded" in capsys.readouterr().err
+
+
+def test_single_manifest_deploy_is_unaffected_by_stack_merging(
+    sample_manifest: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A one-manifest stack must bypass merge_manifests, which is not the identity on a single
+    # manifest: it recomputes Settings.available_on and rebuilds EventHooks.
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["deploy", str(sample_manifest), "--platform", "claude"]) == 0
+    capsys.readouterr()
+
+    assert (tmp_path / ".claude" / "settings.json").is_file()
+    assert (tmp_path / ".claude" / "hooks").is_dir()
+    assert _recorded_stack(tmp_path) == [str(sample_manifest)]
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        pytest.param(["deploy", "--add", "x"], "no deployed stack recorded", id="add-no-stack"),
+        pytest.param(
+            ["deploy", "--remove", "x"], "no deployed stack recorded", id="remove-no-stack"
+        ),
+        pytest.param(["deploy"], "no deployed stack recorded", id="bare-deploy-no-stack"),
+        pytest.param(["check"], "no deployed stack recorded", id="bare-check-no-stack"),
+    ],
+)
+def test_stack_arguments_without_a_recorded_stack_are_usage_errors(
+    argv: list[str],
+    expected: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(argv) == ExitCode.USAGE
+    assert expected in capsys.readouterr().err
+
+
+def test_deploy_without_platform_or_recorded_state_is_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bundle = _bundle(tmp_path / "b", "b", {"r": "body"})
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+
+    assert main(["deploy", str(bundle)]) == ExitCode.USAGE
+    assert "no --platform given" in capsys.readouterr().err
+
+
+def test_mixing_manifest_arguments_with_add_is_a_usage_error(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, bundle_a, _, bundle_c = stacked_workspace
+
+    assert main(["deploy", str(bundle_a), "--add", str(bundle_c)]) == ExitCode.USAGE
+    assert "use one or the other" in capsys.readouterr().err
+
+
+def test_removing_a_manifest_not_in_the_stack_is_a_usage_error(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, _, _, bundle_c = stacked_workspace
+
+    assert main(["deploy", "--remove", str(bundle_c)]) == ExitCode.USAGE
+    assert "is not in the deployed stack" in capsys.readouterr().err
+
+
+def test_removing_every_manifest_is_a_usage_error(
+    stacked_workspace: tuple[Path, Path, Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, bundle_a, bundle_b, _ = stacked_workspace
+
+    rc = main(["deploy", "--remove", str(bundle_a), "--remove", str(bundle_b)])
+
+    assert rc == ExitCode.USAGE
+    assert "boff clean" in capsys.readouterr().err

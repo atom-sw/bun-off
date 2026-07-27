@@ -7,6 +7,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-27
+
+### Added
+
+- `boff deploy` and `boff check` accept several manifests at once. They merge left to right by the
+  same last-wins rules as `extends:`, so the last one given wins on a name collision. This is
+  `extends:` without having to author a wrapper manifest.
+- `boff deploy --add <manifest>` and `--remove <manifest>` change what is deployed in a directory
+  without restating the whole stack. Boff records the manifests it deployed in `.boff/state.json`,
+  re-merges the amended list, and re-deploys the result, so a deploy stays authoritative: adding a
+  manifest is a full re-deploy of a longer stack, not a partial install, and removing one reclaims
+  its files. Both flags are repeatable, and `--remove` applies before `--add`.
+- `--platform` is now optional on `deploy` and `check`, defaulting to the platforms already
+  deployed in the directory. `boff deploy` with no arguments re-deploys the recorded stack, and
+  `boff check` with no arguments verifies it.
+
+### Changed
+
+- Name collisions between merged manifests now print a warning naming the section, the name, and
+  the manifest that won. These warnings went to a `logging` logger boff never configured, so they
+  were never shown; they now go to the console, for `extends:` as well as command-line stacks.
+- A full `boff clean` also forgets the recorded stack, so a later `--add` does not resurrect
+  manifests you just uninstalled. `boff clean --platform <name>` leaves the stack recorded.
+- `.boff/state.json` is now schema version 2, adding the recorded stack. Existing version-1 files
+  load and upgrade in place on the next deploy, with no change to what is installed. A state file
+  written by a newer boff is now reported as such instead of being misread.
+
 ## [0.1.3] - 2026-07-14
 
 ### Fixed
@@ -58,7 +85,8 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/atom-sw/bun-off/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/atom-sw/bun-off/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/atom-sw/bun-off/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/atom-sw/bun-off/compare/v0.1.0...v0.1.1

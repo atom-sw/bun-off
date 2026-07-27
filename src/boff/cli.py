@@ -6,6 +6,7 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 from enum import IntEnum
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
@@ -20,13 +21,18 @@ from boff.executor import execute
 from boff.hooks import HookContext, run_hooks
 from boff.manifest import Manifest, load_manifest
 from boff.manifest_sources import resolve_ref
+from boff.merge import merge_manifests
 from boff.state import (
+    DeployState,
     load_state,
     recorded_owners,
+    recorded_platforms,
+    recorded_stack,
     save_state,
     state_path,
     tool_owner,
     update_workspace_gitignore,
+    with_stack,
     without_owners,
 )
 from boff.types import DeleteOperation, HookPhase, Operation, Scope, ScopeKind
@@ -39,6 +45,14 @@ class ExitCode(IntEnum):
     OK = 0
     ERROR = 1
     USAGE = 2
+
+
+class _UsageError(Exception):
+    """A command-line usage mistake, reported on stderr and exited with ``ExitCode.USAGE``.
+
+    Distinct from :class:`BoffError`, which reports a failure of otherwise valid work and
+    exits with ``ExitCode.ERROR``.
+    """
 
 
 if TYPE_CHECKING:
@@ -78,17 +92,34 @@ def _build_parser() -> argparse.ArgumentParser:
     # the root parser only. Naming the class keeps `sub` assignable to the `SubParsers` alias.
     sub = parser.add_subparsers(dest="command", required=True, parser_class=argparse.ArgumentParser)
 
-    deploy_cmd = sub.add_parser("deploy", help="Deploy a manifest to one or more platforms.")
+    deploy_cmd = sub.add_parser(
+        "deploy", help="Deploy one or more manifests to one or more platforms."
+    )
     deploy_cmd.add_argument(
-        "path", metavar="MANIFEST", help="Path or Git URL of the manifest directory."
+        "paths",
+        metavar="MANIFEST",
+        nargs="*",
+        help="Path or Git URL of a manifest directory. Repeatable: the manifests merge in "
+        "order, so the last one wins on conflicts. Omit to re-deploy the recorded stack.",
+    )
+    deploy_cmd.add_argument(
+        "--add",
+        action="append",
+        metavar="MANIFEST",
+        help="Append a manifest to the deployed stack instead of replacing it (repeatable).",
+    )
+    deploy_cmd.add_argument(
+        "--remove",
+        action="append",
+        metavar="MANIFEST",
+        help="Drop a manifest from the deployed stack (repeatable).",
     )
     deploy_cmd.add_argument(
         "--platform",
         dest="platforms",
         action="append",
-        required=True,
         metavar="NAME",
-        help="Target platform (repeatable).",
+        help="Target platform (repeatable; defaults to the platforms already deployed here).",
     )
     deploy_cmd.add_argument(
         "--dry-run",
@@ -119,19 +150,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _add_check_parser(sub: SubParsers) -> None:
     """Add the 'check' subcommand parser."""
-    check_cmd = sub.add_parser(
-        "check", help="Verify a deployed manifest still matches the workspace."
-    )
+    check_cmd = sub.add_parser("check", help="Verify a deployed stack still matches the workspace.")
     check_cmd.add_argument(
-        "path", metavar="MANIFEST", help="Path or Git URL of the manifest directory."
+        "paths",
+        metavar="MANIFEST",
+        nargs="*",
+        help="Path or Git URL of a manifest directory (repeatable, last wins). "
+        "Omit to check the recorded stack.",
     )
     check_cmd.add_argument(
         "--platform",
         dest="platforms",
         action="append",
-        required=True,
         metavar="NAME",
-        help="Target platform (repeatable).",
+        help="Target platform (repeatable; defaults to the platforms already deployed here).",
     )
     check_cmd.add_argument(
         "--no-probe",
@@ -241,6 +273,12 @@ def _print_meta(manifest: Manifest, dest: TextIO) -> None:
         print(f"  extends: {ref}", file=dest)
 
 
+def _print_stack_meta(members: list[Manifest], dest: TextIO) -> None:
+    """Print one documentation header per manifest in the stack, in merge order."""
+    for manifest in members:
+        _print_meta(manifest, dest)
+
+
 def main(argv: Sequence[str] | None = None) -> ExitCode:
     """CLI entry point. Returns a process exit code."""
     parser = _build_parser()
@@ -256,6 +294,9 @@ def main(argv: Sequence[str] | None = None) -> ExitCode:
             return _cmd_clean(args)
         # Subparsers are declared required=True, so "context" is the only remaining command.
         return _cmd_context(args)
+    except _UsageError as exc:
+        console.error(str(exc), dest=sys.stderr)
+        return ExitCode.USAGE
     except BoffError as exc:
         console.error(str(exc), dest=sys.stderr)
         return ExitCode.ERROR
@@ -266,13 +307,130 @@ def _scope(root: Path | None) -> Scope:
     return Scope(kind=ScopeKind.WORKSPACE, workspace_root=root or Path.cwd())
 
 
+@cache
+def _resolve_from(ref: str, base_root: Path) -> Path:
+    """Resolve a manifest reference, memoized on the reference and the directory it anchors to.
+
+    A reference names the same manifest throughout one command, and resolving a Git reference
+    means a network fetch. Comparing a stack's references and then loading them would otherwise
+    fetch each remote twice. ``base_root`` is part of the key because a relative reference means
+    different things from different directories.
+    """
+    return resolve_ref(ref, base_root=base_root)
+
+
+def _resolve(ref: str) -> Path:
+    """Resolve a manifest reference against the current directory."""
+    return _resolve_from(ref, Path.cwd())
+
+
 def _load(ref: str) -> Manifest:
     """Resolve a manifest reference (a local path or a Git URL) and load what it names.
 
     A reference says *what* to deploy, never *where*: the scope stays the current directory,
     which is what a relative reference resolves against.
     """
-    return load_manifest(resolve_ref(ref, base_root=Path.cwd()))
+    return load_manifest(_resolve(ref))
+
+
+def _load_stack(refs: list[str]) -> tuple[list[Manifest], Manifest]:
+    """Load every reference in ``refs`` and merge them last-wins; return members and result.
+
+    Merging a command-line stack and resolving an ``extends`` chain are the same operation,
+    so both go through ``merge_manifests``. A one-manifest stack is returned *unmerged*:
+    ``merge_manifests`` is not the identity on a single manifest (it recomputes
+    ``Settings.available_on`` and rebuilds ``EventHooks``), so routing the ordinary
+    single-manifest deploy through it would quietly change what that deploy produces.
+    """
+    members = [_load(ref) for ref in refs]
+    if len(members) == 1:
+        return members, members[0]
+    return members, merge_manifests(members[:-1], members[-1])
+
+
+def _same_ref(one: str, other: str) -> bool:
+    """Whether two manifest references name the same manifest.
+
+    Compares the reference strings first, so identical spellings never pay for resolution.
+    An unresolvable reference simply does not match: the caller reports it as absent.
+    """
+    if one == other:
+        return True
+    try:
+        return _resolve(one) == _resolve(other)
+    except BoffError:
+        return False
+
+
+def _find_ref(stack: list[str], ref: str) -> str | None:
+    """Return the entry of ``stack`` naming the same manifest as ``ref``, or None."""
+    return next((entry for entry in stack if _same_ref(entry, ref)), None)
+
+
+def _resolve_stack(
+    recorded: list[str], paths: list[str], add: list[str], remove: list[str]
+) -> list[str]:
+    """Determine the manifest stack to deploy, from the recorded one and the arguments.
+
+    Positional references *replace* the recorded stack; ``--add`` and ``--remove`` *mutate*
+    it. Mixing the two is rejected rather than guessed at. Removals apply before additions,
+    so swapping one manifest for another in a single command reads the way it is written.
+    """
+    if paths and (add or remove):
+        raise _UsageError(
+            "MANIFEST arguments replace the deployed stack while --add/--remove change it: "
+            "use one or the other, not both"
+        )
+    if paths:
+        return _dedup_refs(paths)
+    if not recorded:
+        raise _UsageError(
+            "no deployed stack recorded for this directory: "
+            "run `boff deploy <manifest> --platform <name>` first"
+        )
+    stack = list(recorded)
+    for ref in remove:
+        match = _find_ref(stack, ref)
+        if match is None:
+            raise _UsageError(
+                f"{ref!r} is not in the deployed stack ({', '.join(recorded)}): nothing to remove"
+            )
+        stack.remove(match)
+    for ref in add:
+        match = _find_ref(stack, ref)
+        if match is not None:
+            stack.remove(match)
+            console.warning(f"{ref} is already deployed: moving it last, so it now wins conflicts")
+        stack.append(ref)
+    if not stack:
+        raise _UsageError(
+            "that would leave an empty stack: use `boff clean` to remove everything instead"
+        )
+    return stack
+
+
+def _dedup_refs(refs: list[str]) -> list[str]:
+    """Drop references repeated in ``refs``, keeping the last occurrence of each.
+
+    The last occurrence is what survives because the stack is last-wins: a repeat can only
+    have been meant to raise that manifest's precedence.
+    """
+    out: list[str] = []
+    for ref in reversed(refs):
+        if _find_ref(out, ref) is None:
+            out.append(ref)
+    return list(reversed(out))
+
+
+def _resolve_platforms(selected: list[str] | None, prior: DeployState, scope: Scope) -> list[str]:
+    """Return the platforms to target, falling back to the ones already deployed here."""
+    platforms = list(selected) if selected else recorded_platforms(prior, scope)
+    if not platforms:
+        raise _UsageError(
+            "no --platform given and none recorded for this directory: "
+            "pass --platform <name> at least once"
+        )
+    return platforms
 
 
 def _confirm_wipe(ops: list[Operation]) -> bool:
@@ -344,12 +502,12 @@ def _apply_or_print(ops: list[Operation], *, dry_run: bool) -> ExitCode:
 
 
 def _hook_ctx(
-    phase: HookPhase, args: argparse.Namespace, manifest: Manifest, scope: Scope, count: int
+    phase: HookPhase, platforms: list[str], manifest: Manifest, scope: Scope, count: int
 ) -> HookContext:
     """Construct the context for a hook execution phase."""
     return HookContext(
         phase=phase,
-        platforms=tuple(args.platforms),
+        platforms=tuple(platforms),
         scope=scope,
         manifest_root=manifest.root,
         ops_count=count,
@@ -357,18 +515,29 @@ def _hook_ctx(
 
 
 def _cmd_deploy(args: argparse.Namespace) -> ExitCode:
-    """Deploy a manifest: run hooks, apply the clear/forward/cleanup ops, and save state."""
-    manifest = _load(args.path)
+    """Deploy a manifest stack: run hooks, apply the clear/forward/cleanup ops, save state.
+
+    The stack is merged into one manifest before anything else happens, so the deploy stays
+    authoritative: adding or removing a manifest re-deploys the whole merged result rather
+    than layering onto what is already installed.
+    """
     scope = _scope(None)
     sp = state_path(scope)
     prior = load_state(sp)
-    plan = plan_deploy(manifest, args.platforms, scope, prior, wipe=args.wipe, clean=args.clean)
+    refs = _resolve_stack(
+        recorded_stack(prior, scope), args.paths, args.add or [], args.remove or []
+    )
+    platforms = _resolve_platforms(args.platforms, prior, scope)
+    members, manifest = _load_stack(refs)
+
+    plan = plan_deploy(manifest, platforms, scope, prior, wipe=args.wipe, clean=args.clean)
     all_ops = plan.clear + plan.forward + plan.cleanup
+    next_state = with_stack(plan.next_state, scope, refs)
 
     missing = _missing_hook_scripts(manifest)
 
     if args.dry_run:
-        _print_meta(manifest, sys.stdout)
+        _print_stack_meta(members, sys.stdout)
         _print_ops(all_ops, sys.stdout, force_verbose=True)
         for path in missing:
             console.error(f"missing hook script: {path}", dest=sys.stderr)
@@ -384,42 +553,46 @@ def _cmd_deploy(args: argparse.Namespace) -> ExitCode:
 
     run_hooks(
         manifest.pre_install,
-        _hook_ctx(HookPhase.PRE_INSTALL, args, manifest, scope, len(all_ops)),
+        _hook_ctx(HookPhase.PRE_INSTALL, platforms, manifest, scope, len(all_ops)),
     )
     execute(plan.clear)
     execute(plan.forward)
     execute(plan.cleanup)
-    save_state(plan.next_state, sp)
+    save_state(next_state, sp)
     if not args.no_ignore:
-        update_workspace_gitignore(plan.next_state, scope)
+        update_workspace_gitignore(next_state, scope)
     run_hooks(
         manifest.post_install,
-        _hook_ctx(HookPhase.POST_INSTALL, args, manifest, scope, len(all_ops)),
+        _hook_ctx(HookPhase.POST_INSTALL, platforms, manifest, scope, len(all_ops)),
     )
 
-    _print_meta(manifest, sys.stderr)
+    _print_stack_meta(members, sys.stderr)
     _print_ops(all_ops, sys.stderr)
     return ExitCode.OK
 
 
 def _cmd_check(args: argparse.Namespace) -> ExitCode:
-    """Verify the workspace still matches what a deploy of this manifest would write."""
-    # Probe before loading the manifest, so an unknown --platform fails fast.
-    found = probe(args.platforms) if args.probe else {}
+    """Verify the workspace still matches what a deploy of this stack would write."""
+    scope = _scope(None)
+    sp = state_path(scope)
+    prior = load_state(sp)
+    refs = _resolve_stack(recorded_stack(prior, scope), args.paths, [], [])
+    platforms = _resolve_platforms(args.platforms, prior, scope)
+
+    # Probe before loading the manifests, so an unknown --platform fails fast.
+    found = probe(platforms) if args.probe else {}
     absent = [name for name, path in found.items() if path is None]
     if absent:
         raise BoffError(f"platform CLI not found on PATH: {', '.join(absent)}")
 
-    manifest = _load(args.path)
-    scope = _scope(None)
-    sp = state_path(scope)
-    _print_meta(manifest, sys.stdout)
+    members, manifest = _load_stack(refs)
+    _print_stack_meta(members, sys.stdout)
     if not sp.exists():
         console.warning(f"no deploy state at {sp}: has this workspace been deployed?")
 
-    units = plan_units(manifest, args.platforms, scope)
-    active = [*args.platforms, *(tool_owner(name) for name in manifest.tool_files)]
-    report = verify(units, load_state(sp), scope, active)
+    units = plan_units(manifest, platforms, scope)
+    active = [*platforms, *(tool_owner(name) for name in manifest.tool_files)]
+    report = verify(units, prior, scope, active)
     _print_report(report, found, sys.stdout)
     return ExitCode.ERROR if report.failed else ExitCode.OK
 
@@ -486,8 +659,7 @@ def _cmd_clean(args: argparse.Namespace) -> ExitCode:
     platforms: list[str] = args.platforms or []
 
     if args.wipe and not platforms:
-        console.error("--wipe requires --platform", dest=sys.stderr)
-        return ExitCode.USAGE
+        raise _UsageError("--wipe requires --platform")
 
     cleared_owners = list(platforms) if platforms else recorded_owners(prior, scope)
     ops = build_clear_ops(prior, scope, cleared_owners, wipe=args.wipe)
@@ -501,6 +673,10 @@ def _cmd_clean(args: argparse.Namespace) -> ExitCode:
 
     execute(ops)
     new_state = without_owners(prior, scope, cleared_owners)
+    if not platforms:
+        # A full purge forgets the stack too, so a later `--add` does not resurrect manifests
+        # the user just uninstalled. A platform-scoped clean leaves the stack recorded.
+        new_state = with_stack(new_state, scope, [])
     save_state(new_state, sp)
     if not args.no_ignore:
         update_workspace_gitignore(new_state, scope)

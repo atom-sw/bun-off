@@ -5,17 +5,24 @@ from typing import Any
 
 import pytest
 
+from boff.errors import BoffError
 from boff.state import (
     END_MARKER,
     START_MARKER,
+    STATE_VERSION,
     DeployState,
     OwnerRecord,
     leaf_paths,
     load_state,
     reconcile,
+    recorded_platforms,
+    recorded_stack,
     save_state,
     state_path,
+    tool_owner,
     update_workspace_gitignore,
+    with_stack,
+    without_owners,
 )
 from boff.types import (
     DeleteOperation,
@@ -136,6 +143,67 @@ def test_state_round_trip(workspace_scope: Scope) -> None:
 
 def test_load_state_missing_file_is_empty(tmp_path: Path) -> None:
     assert load_state(tmp_path / "nope.json").scopes == {}
+
+
+def test_stack_round_trips(workspace_scope: Scope) -> None:
+    refs = ["../base", "https://github.com/acme/team.git"]
+    path = state_path(workspace_scope)
+    save_state(with_stack(DeployState(), workspace_scope, refs), path)
+
+    assert load_state(path).version == STATE_VERSION
+    assert recorded_stack(load_state(path), workspace_scope) == refs
+
+
+def test_version_one_state_loads_with_no_stack(tmp_path: Path, workspace_scope: Scope) -> None:
+    # A state file written before stacks existed must keep working: it simply records nothing
+    # for `--add` to build on, and is rewritten as the current version on the next save.
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps({"version": 1, "scopes": {"workspace": {"claude": {"files": ["x.md"]}}}})
+    )
+    loaded = load_state(path)
+
+    assert recorded_stack(loaded, workspace_scope) == []
+    assert loaded.scopes["workspace"]["claude"].files == ["x.md"]
+    assert loaded.version == STATE_VERSION
+
+
+def test_load_state_rejects_a_newer_schema_version(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"version": STATE_VERSION + 1, "scopes": {}}))
+    with pytest.raises(BoffError, match="schema version"):
+        load_state(path)
+
+
+def test_with_stack_preserves_owner_records(workspace_scope: Scope) -> None:
+    state = DeployState(scopes={"workspace": {"claude": OwnerRecord(files=["x.md"])}})
+    updated = with_stack(state, workspace_scope, ["../base"])
+    assert updated.scopes["workspace"]["claude"].files == ["x.md"]
+
+
+def test_without_owners_preserves_the_stack(workspace_scope: Scope) -> None:
+    refs = ["../base"]
+    state = with_stack(
+        DeployState(scopes={"workspace": {"claude": OwnerRecord(files=["x.md"])}}),
+        workspace_scope,
+        refs,
+    )
+    remaining = without_owners(state, workspace_scope, ["claude"])
+    assert remaining.scopes["workspace"] == {}
+    assert recorded_stack(remaining, workspace_scope) == refs
+
+
+def test_recorded_platforms_excludes_tool_owners(workspace_scope: Scope) -> None:
+    state = DeployState(
+        scopes={
+            "workspace": {
+                "claude": OwnerRecord(),
+                tool_owner("mise"): OwnerRecord(),
+                "opencode": OwnerRecord(),
+            }
+        }
+    )
+    assert recorded_platforms(state, workspace_scope) == ["claude", "opencode"]
 
 
 def test_state_path_for_global_scope_roots_at_home(

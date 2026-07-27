@@ -180,7 +180,20 @@ boff deploy ./ai-cannot-code-stack --platform claude --dry-run
 ```
 
 
-## 🧬 Extending manifests
+## 🧬 Combining manifests
+
+Two ways to combine manifests, one set of merge rules:
+
+- **`extends:`** — the manifest's author combines it with its parents. The combination ships with
+  the manifest and applies wherever it is deployed.
+- **A stack on the command line** — the person deploying combines manifests, without authoring a
+  wrapper manifest: `boff deploy ../base-stack ./my-rules --platform claude`. See
+  [Deploying a stack of manifests](#-deploying-a-stack-of-manifests).
+
+Both resolve references the same way and merge with the same [last-wins
+rules](#merge-semantics).
+
+### Extending manifests
 
 A manifest can build on one or more parents with `extends:`. Each reference resolves to another
 manifest folder, which Bun Off loads and merges underneath the current one. `extends:` accepts a
@@ -197,7 +210,7 @@ extends:                               # several parents (mixins)
 ### Reference scheme
 
 A manifest reference names either a local folder or a Git repository. The same scheme applies
-wherever Bun Off takes a manifest: an `extends:` parent, and the `<manifest>` argument of
+wherever Bun Off takes a manifest: an `extends:` parent, and the `<manifest>` arguments of
 [`boff deploy`](#boff-deploy) and [`boff check`](#boff-check).
 
 | Form | Example | Resolves to |
@@ -227,17 +240,29 @@ reuses it on later runs. Every spelling of one repository shares a single clone.
 
 ### Merge semantics
 
-Parents merge in declaration order, then the child overrides all (last definition wins):
+**Last definition wins.** For `extends:`, parents merge in declaration order and the child
+overrides them all. For a command-line stack, manifests merge left to right, so the last argument
+wins. The rules are identical either way:
 
 | Section | How it merges |
 |---|---|
-| `rules`, `skills`, `slash_commands`, `mcp_servers`, `agents`, `plugins` | By `name`: a later definition replaces an earlier one. Bun Off logs a warning for each override. |
+| `rules`, `skills`, `slash_commands`, `mcp_servers`, `agents`, `plugins` | By `name`: a later definition replaces an earlier one. Bun Off prints a warning for each override. |
 | `event_hooks` | By `name`, same as above. |
 | `permissions` | Rule lists concatenate; identical rules are de-duplicated. |
-| `settings` | Deep-merged per platform; the child wins on conflicting keys, parent-only keys survive. |
-| `mise` and other tool files | By tool: the inherited and child file lists are concatenated parent-first and de-duplicated by path. |
-| `hooks.pre_install` / `hooks.post_install` | Concatenated parent-first, de-duplicated. |
-| `meta` | Not inherited: the child's own metadata is kept. |
+| `settings` | Deep-merged per platform; the later block wins on conflicting keys, earlier-only keys survive. |
+| `mise` and other tool files | By tool: the file lists are concatenated in merge order and de-duplicated by path. |
+| `hooks.pre_install` / `hooks.post_install` | By script name; concatenated in merge order. An inherited hook still runs from the bundle that declared it. |
+| `meta` | Not inherited: for `extends:`, the child's own metadata is kept; for a stack, the last manifest's. |
+
+Every name collision prints a warning naming the section, the name, and the manifest that won:
+
+```
+⚠ rules 'style' from /home/me/stacks/my-rules overrides an earlier definition
+```
+
+That is not an error — overriding an inherited rule is the point of `extends:`, and picking one of
+two competing definitions is the point of a stack. The warning is there so a collision you did not
+intend cannot pass unnoticed.
 
 Inheritance cycles (a manifest that extends itself directly or transitively) raise an error.
 
@@ -818,8 +843,9 @@ stack with different rules — just by deploying the other manifest. The previou
 are cleaned up instead of piling up.
 
 Bun Off tracks its footprint in `<workspace_root>/.boff/state.json`, recording for each platform
-(and each tool installer) the files it created and the exact JSON keys it merged into shared
-files (`.mcp.json`, `.claude/settings.json`, `opencode.json`). On a new deploy in the same project
+(and each tool installer) the files it created, the exact JSON keys it merged into shared
+files (`.mcp.json`, `.claude/settings.json`, `opencode.json`), and the manifest references it
+deployed (the [stack](#-deploying-a-stack-of-manifests)). On a new deploy in the same project
 Bun Off:
 
 - deletes files it created that the new manifest no longer emits, then prunes any directories
@@ -886,6 +912,61 @@ boff deploy ./maintenance-stack --platform claude     # remove design's rules, i
 
 Both stacks are ordinary manifest folders. Only one is active at a time per platform.
 
+
+## 🥞 Deploying a stack of manifests
+
+`boff deploy` takes any number of manifests. They merge left to right by the same [last-wins
+rules](#merge-semantics) that govern `extends:`, so **the last one wins** on a name collision:
+
+```bash
+boff deploy ../team-stack ./my-rules --platform claude
+```
+
+This is `extends:` without authoring a wrapper manifest. Reach for a stack when *you* are choosing
+the combination for one project; reach for `extends:` when the combination belongs to the manifest
+and should travel with it.
+
+Bun Off records the stack in `.boff/state.json`, which is what lets you change it later without
+restating it.
+
+### Adding and removing manifests
+
+```bash
+boff deploy --add ./extra-rules          # append to the deployed stack
+boff deploy --remove ../team-stack       # drop one from it
+boff deploy                              # re-deploy the recorded stack unchanged
+```
+
+`--platform` is optional for all three: it defaults to the platforms already deployed in this
+directory. Both flags are repeatable, and `--remove` applies before `--add`, so one command can
+swap a manifest out for another.
+
+Adding is **not** a partial install. Bun Off re-merges the whole stack and deploys the result, so
+every deploy stays authoritative: the workspace matches the current stack exactly, with no
+leftovers from an earlier one. That is why `--remove` reclaims a manifest's files, and why adding
+a manifest that overrides an existing rule takes effect immediately.
+
+`--add` puts the new manifest **last**, so it wins conflicts against everything already deployed.
+Adding a manifest that is already in the stack moves it to the end (raising its precedence) and
+says so.
+
+A few guardrails, each a usage error rather than a guess:
+
+| Situation | What Bun Off does |
+|---|---|
+| Manifest arguments together with `--add` / `--remove` | Refuses: arguments *replace* the stack, the flags *change* it. |
+| `--add`, `--remove`, or a bare `boff deploy` with nothing recorded | Refuses, and tells you to deploy a manifest first. |
+| `--remove` of a manifest not in the stack | Refuses, and lists what is in it. |
+| `--remove` that would empty the stack | Refuses, and points at [`boff clean`](#boff-clean). |
+
+References are compared by the manifest they resolve to, so `--remove ./team-stack` matches a
+stack entry recorded as `team-stack`. They are stored as you typed them, so a Git reference
+re-fetches on the next deploy and picks up any upstream change.
+
+A full `boff clean` also forgets the recorded stack, so a later `--add` starts fresh instead of
+resurrecting what you just uninstalled. A platform-scoped `boff clean --platform <name>` leaves
+the stack recorded.
+
 ### Starting from a clean slate
 
 Two flags (also available as the standalone [`boff clean`](#boff-clean) command) reset a project
@@ -930,16 +1011,19 @@ These precede the subcommand:
 
 ### `boff deploy`
 
-Deploy a manifest to one or more platforms.
+Deploy one or more manifests to one or more platforms.
 
 ```
-boff deploy <manifest> --platform <name> [--platform <name> ...] [--dry-run] [--clean | --wipe] [--no-ignore]
+boff deploy [<manifest> ...] [--add <manifest>] [--remove <manifest>]
+            [--platform <name> ...] [--dry-run] [--clean | --wipe] [--no-ignore]
 ```
 
 | Argument | Description |
 |---|---|
-| `manifest` | Path or Git URL of the manifest directory (must contain `boff.yaml`). See [Reference scheme](#reference-scheme) |
-| `--platform NAME` | Target platform, repeatable (e.g. `--platform claude --platform opencode`) |
+| `manifest` | Path or Git URL of a manifest directory (must contain `boff.yaml`). See [Reference scheme](#reference-scheme). Repeatable: the manifests merge left to right and the last one wins on conflicts. Omit to re-deploy the recorded stack |
+| `--add MANIFEST` | Append a manifest to the deployed stack instead of replacing it, repeatable. See [Adding and removing manifests](#adding-and-removing-manifests) |
+| `--remove MANIFEST` | Drop a manifest from the deployed stack, repeatable |
+| `--platform NAME` | Target platform, repeatable (e.g. `--platform claude --platform opencode`). Defaults to the platforms already deployed in this directory |
 | `--dry-run` | Print planned operations without writing any files or running hooks |
 | `--clean` | Remove Bun Off's entire recorded footprint for this project before installing (non-destructive: keeps files Bun Off never wrote). See [Deploy state & switching stacks](#-deploy-state--switching-stacks) |
 | `--wipe` | Delete all the targeted platforms' native configuration files before installing (destructive: removes hand-authored files too). Prompts for interactive confirmation |
@@ -952,11 +1036,16 @@ boff deploy ./my-stack --platform claude
 boff deploy ./my-stack --platform claude --platform opencode --dry-run
 boff deploy ./my-stack --platform claude --clean      # purge boff's prior footprint, then install
 
+# Combine manifests: ./my-rules wins where the two collide.
+boff deploy ../team-stack ./my-rules --platform claude
+boff deploy --add ./extra-rules                       # append to what is already deployed
+boff deploy --remove ../team-stack                    # and drop one again
+
 # Deploy a published bundle straight from GitHub, no clone of your own:
 boff deploy https://github.com/atom-sw/bun-off-bundles/tree/main/python --platform claude
 ```
 
-The manifest argument says *what* to deploy; the workspace is always the current directory. A
+The manifest arguments say *what* to deploy; the workspace is always the current directory. A
 relative path therefore resolves against the current directory too.
 
 Bun Off runs `pre_install` hooks, applies all operations, then runs `post_install` hooks. Every
@@ -966,18 +1055,18 @@ manifest no longer produces (see [Deploy state & switching stacks](#-deploy-stat
 
 ### `boff check`
 
-Verify that a workspace still matches what deploying this manifest would write. `check` re-plans
+Verify that a workspace still matches what deploying these manifests would write. `check` re-plans
 the deploy, compares the plan against what is actually on disk, and reports each artifact. It
 never writes anything: not the artifacts, not `.boff/state.json`, not `.gitignore`.
 
 ```
-boff check <manifest> --platform <name> [--platform <name> ...] [--no-probe]
+boff check [<manifest> ...] [--platform <name> ...] [--no-probe]
 ```
 
 | Argument | Description |
 |---|---|
-| `manifest` | Path or Git URL of the manifest directory (must contain `boff.yaml`). See [Reference scheme](#reference-scheme) |
-| `--platform NAME` | Target platform, repeatable |
+| `manifest` | Path or Git URL of a manifest directory (must contain `boff.yaml`). See [Reference scheme](#reference-scheme). Repeatable, merging left to right. Omit to check the [recorded stack](#-deploying-a-stack-of-manifests) |
+| `--platform NAME` | Target platform, repeatable. Defaults to the platforms already deployed in this directory |
 | `--no-probe` | Skip checking that each platform's CLI binary is on `PATH`. Use this in CI and containers, where the assistants themselves are not installed |
 | `-v` | Also list every artifact that verified `ok` (a global flag: it goes *before* the subcommand) |
 
@@ -1000,6 +1089,7 @@ Bun Off merged in; keys you added by hand are never reported as drift, and never
 **Example:**
 
 ```bash
+boff check                                           # check whatever is deployed here
 boff check ./my-stack --platform claude              # quiet: only what is wrong, plus a tally
 boff check ./my-stack --platform claude --no-probe   # do not require the `claude` binary
 boff -v check ./my-stack --platform claude           # also list every artifact that verified ok
@@ -1045,6 +1135,10 @@ boff clean [--platform <name> ...] [--root <dir>] [--wipe] [--dry-run] [--no-ign
 
 Without `--wipe`, `boff clean` is non-destructive: it removes only the files and merged JSON
 keys Bun Off itself recorded, preserving anything you authored by hand.
+
+Cleaning every platform also forgets the [recorded stack](#-deploying-a-stack-of-manifests), so a
+later `boff deploy --add` starts from nothing rather than reinstalling what you just removed.
+`boff clean --platform <name>` leaves the stack recorded.
 
 **Example:**
 

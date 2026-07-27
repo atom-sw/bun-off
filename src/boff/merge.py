@@ -1,18 +1,25 @@
-"""Merge resolved manifests for ``extends``: child overrides parent (last-wins)."""
+"""Merge resolved manifests, last-wins.
+
+Two callers share this: ``extends``, where the child overrides its parents, and a stack of
+manifests named on one ``boff deploy`` command line, where the last reference wins. The
+semantics are identical, so both go through :func:`merge_manifests`.
+
+Shadow warnings print through ``console`` rather than the ``logging`` module the adapters use
+for warn-and-skip: boff never configures logging, and a name collision between manifests the
+user just combined is something they need to see and can act on.
+"""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from boff.artifacts import EventHook, EventHooks, PermissionRule, Permissions, Settings
+from boff.console import console
 from boff.jsonutil import json_deep_merge
 from boff.manifest import Manifest
 from boff.types import Named
-
-_log = logging.getLogger(__name__)
 
 
 def merge_manifests(parents: list[Manifest], child: Manifest) -> Manifest:
@@ -54,11 +61,8 @@ def _merge_named[T: Named](
     for manifest in chain:
         for item in get(manifest):
             if item.name in out:
-                _log.warning(
-                    "extends: %s '%s' from %s overrides an inherited definition",
-                    label,
-                    item.name,
-                    manifest.root,
+                console.warning(
+                    f"{label} '{item.name}' from {manifest.root} overrides an earlier definition"
                 )
             out[item.name] = item
     return tuple(out.values())
@@ -126,10 +130,8 @@ def _merge_event_hooks(chain: list[Manifest]) -> EventHooks | None:
             continue
         for hook in manifest.event_hooks.hooks:
             if hook.name in hooks:
-                _log.warning(
-                    "extends: event hook '%s' from %s overrides an inherited definition",
-                    hook.name,
-                    manifest.root,
+                console.warning(
+                    f"event hook '{hook.name}' from {manifest.root} overrides an earlier definition"
                 )
             hooks[hook.name] = hook
     return EventHooks(hooks=tuple(hooks.values())) if hooks else None

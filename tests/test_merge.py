@@ -1,4 +1,3 @@
-import logging
 from pathlib import Path
 
 import pytest
@@ -17,14 +16,14 @@ def _rule(name: str, content: str) -> Rule:
     return Rule(name=name, content=content)
 
 
-def test_child_overrides_parent_by_name(caplog: pytest.LogCaptureFixture) -> None:
-    parent = _m("p", rules=(_rule("shared", "parent"), _rule("only_p", "p")))
-    child = _m("c", rules=(_rule("shared", "child"), _rule("only_c", "c")))
-    with caplog.at_level(logging.WARNING):
-        merged = merge_manifests([parent], child)
+def test_child_overrides_parent_by_name(capsys: pytest.CaptureFixture[str]) -> None:
+    shared = "shared"
+    parent = _m("p", rules=(_rule(shared, "parent"), _rule("only_p", "p")))
+    child = _m("c", rules=(_rule(shared, "child"), _rule("only_c", "c")))
+    merged = merge_manifests([parent], child)
     by = {r.name: r.content for r in merged.rules}
-    assert by == {"shared": "child", "only_p": "p", "only_c": "c"}
-    assert any("shared" in rec.message for rec in caplog.records)
+    assert by == {shared: "child", "only_p": "p", "only_c": "c"}
+    assert shared in capsys.readouterr().err
 
 
 def test_multiparent_last_wins() -> None:

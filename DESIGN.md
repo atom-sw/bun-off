@@ -306,6 +306,11 @@ keyed by `(scope, owner)`. For each owner it stores:
   the executor's deep-merge exactly (recurse into dicts; lists and scalars are owned wholesale),
   so the recorded provenance is precisely what boff would re-merge.
 
+Beside the per-owner records, keyed by scope alone, sits `stacks`: the ordered manifest references
+the last deploy was given. Schema version 2 added it; a version-1 file loads as a version-2 state
+with no recorded stack, and `load_state` rejects a version it does not understand rather than
+misreading it.
+
 `reconcile(prior, forward_by_owner, active_owners, scope)` diffs the recorded state against the
 new plan and returns `(cleanup_ops, next_state)`. For each active owner it emits a
 `DeleteOperation` for every recorded file the new plan no longer produces, and a
@@ -328,6 +333,26 @@ reconciling the forward pass, so their footprint is not removed twice.
 This keeps the executor dumb and planning pure: state lives in its own module, reconciliation is
 a pure diff producing ordinary `Operation` values, and only the CLI ties load/plan/reconcile/save
 together.
+
+### Why the stack is a list of references, not per-bundle ownership
+
+`boff deploy` takes several manifests, and `--add` / `--remove` change what is deployed without
+restating it. The obvious implementation — record *which bundle* wrote each file, then install or
+reclaim one bundle's footprint in isolation — was rejected. It would put a third component in the
+state key, make every merged JSON leaf jointly owned by however many bundles produced it, and,
+worst, break the authoritative-deploy invariant: two bundles could each hold a stale opinion about
+the same file with no single answer to "what should be here".
+
+Recording the *reference list* instead keeps the invariant intact. `--add` and `--remove` are list
+arithmetic over `stacks[scope]`; the result is loaded, merged into one `Manifest`, and deployed by
+the unchanged path. Everything downstream of `cli._load_stack` — `plan_deploy`, `reconcile`, the
+executor, the `.gitignore` block — still sees exactly one manifest and one authoritative plan, so
+adding a bundle is not a partial install: it is a full re-deploy of a longer stack.
+
+The cost is that a recorded reference must still resolve when it is next used, which is a
+deliberate trade: a Git reference re-fetches (picking up upstream changes, as a redeploy should)
+and a relative path resolves against the deploy directory (which is always cwd, so it stays
+valid). Storing resolved paths instead would pin a Git bundle to a stale cache checkout.
 
 ---
 
@@ -629,7 +654,7 @@ first match wins. `LocalManifestSource` is the catch-all (any path relative to `
 Resolution is a load-time concern, so the git source shells out to `git` directly rather than
 emitting deploy `Operation`s.
 
-**The CLI's manifest argument goes through `resolve_ref` too** (`cli._load`, with
+**The CLI's manifest arguments go through `resolve_ref` too** (`cli._load`, with
 `base_root=Path.cwd()`), so `boff deploy` and `boff check` accept exactly what `extends:` accepts.
 A reference selects the manifest; the deploy scope stays the current directory either way. Before
 this, the CLI called `load_manifest` on a `Path` built from the raw argument, so a URL silently
@@ -647,11 +672,24 @@ matches no rule raises rather than cloning something arbitrary.
 `merge_manifests(parents, child)` (`src/boff/merge.py`) merges fully-resolved `Manifest`
 objects, not raw YAML: each artifact already carries content read from its own root, so the
 merge never tracks per-artifact source roots. Last definition wins: named artifacts override by
-`name` (logging a warning per shadow), permission rules and tool-installer file lists (`mise:`)
+`name` (warning per shadow), permission rules and tool-installer file lists (`mise:`)
 concatenate parent-first with de-duplication, lifecycle-hook scripts merge by name (last definer
 wins, each carried as an absolute path resolved against its defining manifest so an inherited
 hook runs from its own bundle), `settings` deep-merge per
 platform via `_json_deep_merge`, and `meta` stays the child's own (identity is not inherited).
+
+**A command-line stack is the same merge.** `cli._load_stack` loads each reference given to
+`boff deploy` / `boff check` and calls `merge_manifests(members[:-1], members[-1])`, so the last
+argument plays the child's role and the ordering rule a user learns for `extends:` transfers
+unchanged. Only the single-manifest case is special: it returns the member *unmerged*, because
+`merge_manifests` is not the identity on one manifest (it recomputes `Settings.available_on` and
+rebuilds `EventHooks`), and an ordinary one-manifest deploy must not change behavior.
+
+The shadow warning goes to `console`, not the `logging` module the adapters use for warn-and-skip.
+That is a deliberate exception: boff configures no logging handler, so every shadow was previously
+swallowed, and a collision between two manifests a user just combined on one command line is both
+surprising and actionable. Adapter warnings stay on `logging`, where a warn-and-skip on a platform
+that structurally cannot express an artifact is expected rather than newsworthy.
 
 > Security: resolving a remote `extends:` runs `git` against an author-declared URL. This is
 > trusted by construction (the author wrote the reference into their own manifest) but means a

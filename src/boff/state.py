@@ -5,6 +5,11 @@ the files boff created and the JSON key paths it injected into merged files. On 
 next deploy :func:`reconcile` diffs the recorded state against the new operations and
 emits :class:`DeleteOperation` / :class:`PruneKeysOperation` ops to remove what boff no
 longer produces, leaving user-authored files and keys intact.
+
+The file also records the *stack*: the ordered manifest references last deployed to each
+scope. That record is what lets ``boff deploy --add`` / ``--remove`` mutate a deployment
+without giving up the invariant that every deploy is authoritative: they rewrite the
+reference list, then re-merge and re-deploy the whole stack.
 """
 
 from __future__ import annotations
@@ -33,6 +38,13 @@ KeyPath = tuple[str, ...]
 STATE_DIR = ".boff"
 STATE_FILENAME = "state.json"
 
+# Schema version of the state file. 2 added the `stacks` block; a version-1 file loads as a
+# version-2 state with no recorded stack, and is rewritten as version 2 on the next save.
+STATE_VERSION = 2
+
+# Prefix marking an owner key as a tool installer rather than a platform.
+TOOL_PREFIX = "tool:"
+
 START_MARKER = "# BEGIN boff-managed"
 END_MARKER = "# END boff-managed"
 
@@ -47,12 +59,13 @@ class OwnerRecord:
 
 @dataclass
 class DeployState:
-    """Boff's recorded footprint, keyed by scope then owner."""
+    """Boff's recorded footprint, keyed by scope then owner, plus each scope's stack."""
 
-    version: int = 1
+    version: int = STATE_VERSION
     scopes: dict[str, dict[str, OwnerRecord]] = field(
         default_factory=dict[str, dict[str, OwnerRecord]]
     )
+    stacks: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
 
 
 def leaf_paths(obj: Any, prefix: KeyPath = ()) -> list[KeyPath]:
@@ -77,7 +90,7 @@ def scope_key(scope: Scope) -> str:
 
 def tool_owner(name: str) -> str:
     """Owner key for a tool installer's files: ``tool:<name>``."""
-    return f"tool:{name}"
+    return f"{TOOL_PREFIX}{name}"
 
 
 def recorded_owners(state: DeployState, scope: Scope) -> list[str]:
@@ -85,11 +98,50 @@ def recorded_owners(state: DeployState, scope: Scope) -> list[str]:
     return list(state.scopes.get(scope_key(scope), {}))
 
 
+def recorded_platforms(state: DeployState, scope: Scope) -> list[str]:
+    """Platform owners recorded for ``scope``, excluding the ``tool:<name>`` installers.
+
+    This is what ``--platform`` falls back to, so re-deploying a workspace need not restate
+    the platforms it was deployed to.
+    """
+    return [o for o in recorded_owners(state, scope) if not o.startswith(TOOL_PREFIX)]
+
+
+def recorded_stack(state: DeployState, scope: Scope) -> list[str]:
+    """The ordered manifest references last deployed to ``scope``."""
+    return list(state.stacks.get(scope_key(scope), []))
+
+
+def with_stack(state: DeployState, scope: Scope, refs: list[str]) -> DeployState:
+    """Return ``state`` with ``scope``'s recorded stack replaced by ``refs``."""
+    return _replace_scope(state, scope, stack=list(refs))
+
+
 def without_owners(state: DeployState, scope: Scope, owners: list[str]) -> DeployState:
     """Return ``state`` with ``owners`` dropped from ``scope`` (their footprint is gone)."""
     key = scope_key(scope)
     remaining = {o: rec for o, rec in state.scopes.get(key, {}).items() if o not in owners}
-    return DeployState(version=state.version, scopes={**state.scopes, key: remaining})
+    return _replace_scope(state, scope, owners=remaining)
+
+
+def _replace_scope(
+    state: DeployState,
+    scope: Scope,
+    *,
+    owners: dict[str, OwnerRecord] | None = None,
+    stack: list[str] | None = None,
+) -> DeployState:
+    """Return a copy of ``state`` with ``scope``'s owner records and/or stack replaced.
+
+    Whichever argument is omitted is carried over unchanged, so neither caller can drop the
+    other's half of the scope's record by accident.
+    """
+    key = scope_key(scope)
+    return DeployState(
+        version=state.version,
+        scopes={**state.scopes, key: state.scopes.get(key, {}) if owners is None else owners},
+        stacks={**state.stacks, key: state.stacks.get(key, []) if stack is None else stack},
+    )
 
 
 def _scope_root(scope: Scope) -> Path:
@@ -176,7 +228,7 @@ def reconcile(
                     )
         next_scope[owner] = new_record
 
-    next_state = DeployState(version=prior.version, scopes={**prior.scopes, key: next_scope})
+    next_state = _replace_scope(prior, scope, owners=next_scope)
     return ops, next_state
 
 
@@ -190,6 +242,12 @@ def load_state(path: Path) -> DeployState:
         raise BoffError(
             f"corrupt state file {path}: {exc}. Fix or remove it to re-deploy."
         ) from exc
+    found = raw.get("version", 1)
+    if found > STATE_VERSION:
+        raise BoffError(
+            f"state file {path} has schema version {found}, but this boff understands "
+            f"version {STATE_VERSION}. Upgrade boff, or remove the file to re-deploy."
+        )
     scopes: dict[str, dict[str, OwnerRecord]] = {}
     for skey, owners in raw.get("scopes", {}).items():
         scopes[skey] = {
@@ -202,7 +260,10 @@ def load_state(path: Path) -> DeployState:
             )
             for owner, rec in owners.items()
         }
-    return DeployState(version=raw.get("version", 1), scopes=scopes)
+    # A version-1 file has no `stacks` block: it loads with no recorded stack, which is what
+    # `--add` / `--remove` report on, and is rewritten as version 2 by the next `save_state`.
+    stacks = {skey: [str(ref) for ref in refs] for skey, refs in raw.get("stacks", {}).items()}
+    return DeployState(version=STATE_VERSION, scopes=scopes, stacks=stacks)
 
 
 def _write_state_gitignore(state_dir: Path) -> None:
@@ -219,7 +280,8 @@ def save_state(state: DeployState, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_state_gitignore(path.parent)
     payload = {
-        "version": state.version,
+        "version": STATE_VERSION,
+        "stacks": {skey: list(refs) for skey, refs in state.stacks.items() if refs},
         "scopes": {
             skey: {
                 owner: {
