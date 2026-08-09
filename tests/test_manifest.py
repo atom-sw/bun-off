@@ -16,6 +16,7 @@ def test_load_manifest_counts(sample_manifest: Path) -> None:
     assert len(m.rules) == 1
     assert len(m.skills) == 1
     assert len(m.slash_commands) == 1
+    assert len(m.output_styles) == 1
     assert len(m.mcp_servers) == 2
     assert len(m.plugins) == 1
     assert m.permissions is not None

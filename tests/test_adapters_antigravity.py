@@ -13,6 +13,7 @@ from boff.artifacts import (
     EventHook,
     EventHooks,
     MCPServer,
+    OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
@@ -356,6 +357,15 @@ def test_render_slash_command_warns_and_emits_nothing(caplog: pytest.LogCaptureF
     assert command.name in caplog.text
 
 
+def test_render_output_style_warns_and_emits_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    adapter = AntigravityAdapter()
+    style = OutputStyle(name="tutor", content="body")
+    with caplog.at_level(logging.WARNING):
+        ops = render(adapter, style)
+    assert ops == []
+    assert style.name in caplog.text
+
+
 def test_render_settings_warns_and_emits_nothing(caplog: pytest.LogCaptureFixture) -> None:
     adapter = AntigravityAdapter()
     with caplog.at_level(logging.WARNING):
@@ -386,7 +396,7 @@ def test_render_settings_for_another_platform_is_silent(caplog: pytest.LogCaptur
 
 @pytest.mark.parametrize(
     "artifact_type",
-    [Rules, Skill, SlashCommand, MCPServer, Permissions, Agent, Settings, EventHooks],
+    [Rules, Skill, SlashCommand, OutputStyle, MCPServer, Permissions, Agent, Settings, EventHooks],
 )
 def test_adapter_supports_each_artifact_type(artifact_type: type) -> None:
     assert AntigravityAdapter().supports(artifact_type)

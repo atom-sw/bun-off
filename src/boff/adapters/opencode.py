@@ -11,6 +11,7 @@ from boff.artifacts import (
     EventHook,
     EventHooks,
     NativeHook,
+    OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
@@ -211,6 +212,25 @@ class OpenCodeAdapter(PlatformAdapter):
             )
         )
         return ops
+
+    @renders(OutputStyle, drops=True)
+    def _output_style(
+        self, artifact: OutputStyle, *, platform: str, scope: Scope
+    ) -> list[Operation]:
+        """Warn and skip: OpenCode has no output-style surface.
+
+        Its nearest analogue is a primary agent, but an agent's ``prompt`` *replaces* the base
+        system prompt rather than appending to it, so ``keep-coding-instructions: true`` has no
+        encoding. boff does not translate: authors write the OpenCode side explicitly as an
+        ``agents:`` entry with ``mode: primary``, selected via ``settings.opencode.default_agent``.
+        """
+        del platform, scope
+        _log.warning(
+            "output style %r has no OpenCode equivalent; skipping (scope it with "
+            "available_on: [claude], and add an agents: entry with mode: primary for OpenCode)",
+            artifact.name,
+        )
+        return []
 
     @renders(Agent)
     def _agent(self, artifact: Agent, *, platform: str, scope: Scope) -> list[Operation]:

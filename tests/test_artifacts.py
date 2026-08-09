@@ -6,6 +6,7 @@ import pytest
 from boff.artifacts import (
     Agent,
     MCPServer,
+    OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
@@ -30,10 +31,15 @@ def _make_agent(**kw: Any) -> Agent:
     return Agent(name="a", content="body", description="d", **kw)
 
 
+def _make_output_style(**kw: Any) -> OutputStyle:
+    return OutputStyle(name="tutor", content="body", **kw)
+
+
 _AVAILABILITY_FACTORIES = [
     pytest.param(_make_rule, id="rule"),
     pytest.param(_make_permission_rule, id="permission"),
     pytest.param(_make_agent, id="agent"),
+    pytest.param(_make_output_style, id="output_style"),
 ]
 
 
@@ -69,6 +75,13 @@ def test_slash_command_round_trip() -> None:
     cmd = SlashCommand(name="lint", content="# lint")
     assert cmd.name == "lint"
     assert cmd.content == "# lint"
+
+
+def test_output_style_round_trip() -> None:
+    body = "---\nname: Tutor\n---\n\nexplain first"
+    style = OutputStyle(name="tutor", content=body)
+    assert style.name == "tutor"
+    assert style.content == body
 
 
 def test_mcp_server_holds_raw_per_platform() -> None:

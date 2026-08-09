@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from boff.artifacts import EventHook, EventHooks, PermissionRule, Permissions, Settings
+from boff.artifacts import (
+    EventHook,
+    EventHooks,
+    OutputStyle,
+    PermissionRule,
+    Permissions,
+    Settings,
+)
 from boff.artifacts.rule import Rule
 from boff.manifest import Manifest, ManifestMeta
 from boff.merge import merge_manifests
@@ -23,6 +30,23 @@ def test_child_overrides_parent_by_name(capsys: pytest.CaptureFixture[str]) -> N
     merged = merge_manifests([parent], child)
     by = {r.name: r.content for r in merged.rules}
     assert by == {shared: "child", "only_p": "p", "only_c": "c"}
+    assert shared in capsys.readouterr().err
+
+
+def test_output_styles_merge_by_name(capsys: pytest.CaptureFixture[str]) -> None:
+    # Regression guard: a Manifest field with no _merge_named line silently vanishes
+    # under `extends`, since merge_manifests rebuilds the Manifest field by field.
+    shared = "tutor"
+    parent = _m("p", output_styles=(OutputStyle(name=shared, content="parent"),))
+    child = _m(
+        "c",
+        output_styles=(
+            OutputStyle(name=shared, content="child"),
+            OutputStyle(name="terse", content="c"),
+        ),
+    )
+    merged = merge_manifests([parent], child)
+    assert {s.name: s.content for s in merged.output_styles} == {shared: "child", "terse": "c"}
     assert shared in capsys.readouterr().err
 
 

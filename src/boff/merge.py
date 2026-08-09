@@ -38,6 +38,7 @@ def merge_manifests(parents: list[Manifest], child: Manifest) -> Manifest:
         rules=_merge_named(chain, lambda m: m.rules, "rules"),
         skills=_merge_named(chain, lambda m: m.skills, "skills"),
         slash_commands=_merge_named(chain, lambda m: m.slash_commands, "slash_commands"),
+        output_styles=_merge_named(chain, lambda m: m.output_styles, "output_styles"),
         mcp_servers=_merge_named(chain, lambda m: m.mcp_servers, "mcp_servers"),
         plugins=_merge_named(chain, lambda m: m.plugins, "plugins"),
         tool_files=_merge_tool_files(chain),

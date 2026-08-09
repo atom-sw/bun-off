@@ -17,6 +17,9 @@ skills:
 slash_commands:
   - lint
 
+output_styles:
+  - tutor
+
 mcp_servers:
   - context7
   - tldr

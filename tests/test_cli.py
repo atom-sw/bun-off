@@ -6,7 +6,7 @@ import pytest
 
 from boff import verify as verify_module
 from boff.cli import ExitCode, main
-from tests.conftest import REMOTE_NAME, REMOTE_SUBDIR, SKILL_SUPPORT
+from tests.conftest import META, REMOTE_NAME, REMOTE_SUBDIR, SKILL_SUPPORT
 
 # The directory-form skill built by the `skill_bundle` fixture.
 SKILL_NAME = "s"
@@ -54,6 +54,53 @@ def test_deploy_applies_files(
     assert rc == 0
     assert (tmp_path / ".claude" / "rules" / "dev-essentials" / "style.md").is_file()
     assert (tmp_path / ".mcp.json").is_file()
+
+
+def test_deploying_an_output_style_writes_it_verbatim(
+    sample_manifest: Path, deployed_workspace: Path
+) -> None:
+    # Claude parses output-style frontmatter with a strict schema, so a byte-for-byte copy is
+    # the contract: any rewriting by boff would make the style fail to load.
+    source = sample_manifest / "output_styles" / "tutor.md"
+    deployed = deployed_workspace / ".claude" / "output-styles" / "tutor.md"
+    assert deployed.read_text() == source.read_text()
+
+
+def test_removing_an_output_style_deletes_it_and_prunes_the_directory(
+    deployed_workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    styles = deployed_workspace / ".claude" / "output-styles"
+    assert (styles / "tutor.md").is_file()
+    bare = deployed_workspace / "bare"
+    (bare / "rules").mkdir(parents=True)
+    (bare / "rules" / "style.md").write_text("# style\n")
+    (bare / "boff.yaml").write_text(META + "rules:\n  - style\n")
+
+    assert main(["deploy", str(bare), "--platform", "claude"]) == ExitCode.OK
+    capsys.readouterr()
+
+    assert not (styles / "tutor.md").exists()
+    assert not styles.exists()
+
+
+@pytest.mark.usefixtures("binary_on_path")
+def test_check_reports_an_output_style_dropped_on_opencode(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # OpenCode has no output-style surface. That is a report, not a failure.
+    monkeypatch.chdir(tmp_path)
+    assert main(["deploy", str(sample_manifest), "--platform", "opencode"]) == ExitCode.OK
+    capsys.readouterr()
+
+    rc = main(["check", str(sample_manifest), "--platform", "opencode"])
+
+    out = capsys.readouterr().out
+    assert rc == ExitCode.OK
+    assert "dropped   output style tutor" in out
+    assert not (tmp_path / ".opencode" / "output-styles").exists()
 
 
 def test_deploy_runs_pre_and_post_install_hooks(

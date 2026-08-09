@@ -19,6 +19,7 @@ from boff.artifacts import (
     Artifact,
     EventHooks,
     MCPServer,
+    OutputStyle,
     Permissions,
     Rule,
     Rules,
@@ -75,6 +76,8 @@ def artifact_label(artifact: Artifact) -> str:
             label = f"skill {artifact.name}"
         case SlashCommand():
             label = f"slash command {artifact.name}"
+        case OutputStyle():
+            label = f"output style {artifact.name}"
         case MCPServer():
             label = f"mcp server {artifact.name}"
         case Permissions():

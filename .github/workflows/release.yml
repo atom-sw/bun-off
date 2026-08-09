@@ -9,6 +9,11 @@ permissions: {}
 jobs:
   build:
     name: Build and validate distributions
+    # Both repositories carry this workflow: `main` and its tags are mirrored to the
+    # private `atom-sw/bun-off-dev`, whose tag push starts a run with no trusted
+    # publisher behind it (and must never have one). Keep this literal in step with the
+    # publisher table in CONTRIBUTING.md; a stale one skips every release silently.
+    if: github.repository == 'atom-sw/bun-off'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,6 +54,9 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: build
+    # Redundant while `needs: build` holds, and deliberately so: this is the job that
+    # mints the OIDC token.
+    if: github.repository == 'atom-sw/bun-off'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

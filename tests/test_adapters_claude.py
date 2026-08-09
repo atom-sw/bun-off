@@ -9,6 +9,7 @@ from boff.artifacts import (
     EventHook,
     EventHooks,
     MCPServer,
+    OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
@@ -70,6 +71,27 @@ def test_render_slash_command() -> None:
     adapter = ClaudeAdapter()
     ops = adapter.render(SlashCommand(name="lint", content="body"), platform="claude", scope=SCOPE)
     assert file_op(ops[0]).target == WORKSPACE / ".claude" / "commands" / "lint.md"
+
+
+def test_render_output_style_uses_claudes_hyphenated_directory() -> None:
+    adapter = ClaudeAdapter()
+    style = OutputStyle(
+        name="tutor",
+        content="---\nname: Tutor\nkeep-coding-instructions: true\n---\n\nexplain first",
+    )
+    ops = adapter.render(style, platform="claude", scope=SCOPE)
+    assert file_op(ops[0]).target == WORKSPACE / ".claude" / "output-styles" / "tutor.md"
+
+
+def test_render_output_style_ships_the_body_verbatim() -> None:
+    # Claude validates output-style frontmatter against a strict schema, so boff must not
+    # rewrite or inject keys: whatever the author wrote is what deploys.
+    style = OutputStyle(
+        name="tutor",
+        content="---\nname: Tutor\nkeep-coding-instructions: true\n---\n\nexplain first",
+    )
+    ops = ClaudeAdapter().render(style, platform="claude", scope=SCOPE)
+    assert text_of(ops[0]) == style.content
 
 
 def test_render_mcp_server() -> None:
@@ -341,7 +363,7 @@ def test_render_event_hooks_excludes_opencode_scoped() -> None:
 
 @pytest.mark.parametrize(
     "artifact_type",
-    [Rule, Skill, SlashCommand, MCPServer, Permissions, Agent, Settings, EventHooks],
+    [Rule, Skill, SlashCommand, OutputStyle, MCPServer, Permissions, Agent, Settings, EventHooks],
 )
 def test_adapter_supports_each_artifact_type(artifact_type: type) -> None:
     assert ClaudeAdapter().supports(artifact_type)

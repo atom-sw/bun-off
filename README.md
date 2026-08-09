@@ -55,6 +55,7 @@ my-stack/
   rules/            # one <name>.md per listed rule
   skills/           # one <name>.md per listed skill, or a <name>/ folder holding SKILL.md
   slash_commands/   # one <name>.md per listed command
+  output_styles/    # one <name>.md per listed output style (Claude Code only)
   agents/           # one <name>.md per listed agent (system-prompt body)
   mcp_servers/
     raw/
@@ -98,6 +99,9 @@ skills:
 
 slash_commands:
   - refactor
+
+output_styles:
+  - tutor
 
 agents:
   - name: reviewer
@@ -246,7 +250,7 @@ wins. The rules are identical either way:
 
 | Section | How it merges |
 |---|---|
-| `rules`, `skills`, `slash_commands`, `mcp_servers`, `agents`, `plugins` | By `name`: a later definition replaces an earlier one. Bun Off prints a warning for each override. |
+| `rules`, `skills`, `slash_commands`, `output_styles`, `mcp_servers`, `agents`, `plugins` | By `name`: a later definition replaces an earlier one. Bun Off prints a warning for each override. |
 | `event_hooks` | By `name`, same as above. |
 | `permissions` | Rule lists concatenate; identical rules are de-duplicated. |
 | `settings` | Deep-merged per platform; the later block wins on conflicting keys, earlier-only keys survive. |
@@ -391,6 +395,77 @@ Slash commands are markdown files that define custom `/commands`. Each name reso
 Antigravity CLI's slash commands are built in, and it discovers no author-supplied command
 directory in the workspace. Scope your commands with `available_on: [claude, opencode]` to
 silence the warning.
+
+### Output styles
+
+An output style changes the assistant's *system prompt*, not the context around it. Where a rule
+adds guidance on top of the platform's built-in instructions, an output style **replaces** Claude
+Code's software-engineering instructions unless the file opts to keep them. Each name resolves to
+`output_styles/<name>.md`.
+
+| Platform | Path |
+|---|---|
+| Claude Code | `.claude/output-styles/<name>.md` |
+| OpenCode | not supported: warns and skips |
+| Antigravity CLI | not supported: warns and skips |
+
+The file ships **verbatim**, frontmatter included, so write it exactly as Claude Code expects:
+
+```markdown
+---
+name: Tutor
+description: Explain the plan before editing
+keep-coding-instructions: true
+---
+
+Before each edit, state the plan in two sentences, then make the change.
+```
+
+Claude Code validates this frontmatter against a **strict** schema: only `name` (defaults to the
+filename), `description`, and `keep-coding-instructions` (default `false`) are accepted, and any
+other key makes the style fail to load. A fourth key, `force-for-plugin`, is reserved for
+plugin-bundled styles; setting it in a bundle only produces a warning, so leave it out.
+
+Defining a style does not activate it. Select one through the `settings:` block:
+
+```yaml
+output_styles:
+  - tutor
+
+settings:
+  claude:
+    outputStyle: Tutor        # the frontmatter `name`, not the filename
+```
+
+Two caveats worth knowing:
+
+- Picking a style interactively through `/config` writes it to `.claude/settings.local.json`,
+  which **overrides** the `.claude/settings.json` that Bun Off deploys. If a deployed
+  `outputStyle` appears to have no effect, check for a local override.
+- Built-in styles (`default`, `Proactive`, `Explanatory`, `Learning`) cannot be shadowed by a
+  file of the same name.
+
+**Neither other platform has this surface.** OpenCode's nearest analogue is a *primary agent*, but
+an agent's prompt replaces the base system prompt outright rather than appending to it, so
+`keep-coding-instructions: true` has no equivalent there. Bun Off does not translate silently.
+Write the OpenCode side explicitly instead, and scope each artifact to its platform:
+
+```yaml
+output_styles:
+  - { name: tutor, available_on: [claude] }
+
+agents:
+  - name: tutor
+    description: Explain the plan before editing
+    mode: primary
+    available_on: [opencode]
+
+settings:
+  claude:   { outputStyle: Tutor }
+  opencode: { default_agent: tutor }
+```
+
+Antigravity CLI has no output-style directory and no system-prompt override at all.
 
 ### MCP servers
 
@@ -838,8 +913,8 @@ on `session_start`, and keep hot via `after_edit`.
 
 ## 🎯 Targeting platforms with `available_on:`
 
-Any artifact accepts an optional `available_on:` list: rules, skills, slash commands, MCP servers,
-agents, and event hooks, plus each individual permission rule (whether top-level or per-agent).
+Any artifact accepts an optional `available_on:` list: rules, skills, slash commands, output
+styles, MCP servers, agents, and event hooks, plus each individual permission rule (whether top-level or per-agent).
 When set, Bun Off only deploys that artifact to the listed platforms. When omitted, Bun Off deploys
 the artifact to every platform in the current `--platform` invocation.
 
@@ -863,7 +938,7 @@ The **CLI binary** column is what [`boff check`](#boff-check) looks for on `PATH
 verifies a platform. Pass `--no-probe` to skip that gate.
 
 Antigravity CLI supports a subset of the manifest. It has no workspace target for slash
-commands, settings, or permissions, and no session lifecycle events; Bun Off warns and skips each
+commands, output styles, settings, or permissions, and no session lifecycle events; Bun Off warns and skips each
 of those rather than writing a file the tool would silently ignore. `boff check` reports those
 artifacts as `dropped` and still exits `0`: the platform is doing what it declared. See
 [Known limitations](#-known-limitations).
@@ -1320,12 +1395,19 @@ Every command returns one of three exit codes, so you can script against them:
   selects a scope.
 
 - **Antigravity CLI supports a subset of the manifest.** It has no workspace target for
-  `slash_commands:`, `settings:`, or `permissions:` (its settings and permission allowlist live
-  in the machine-global `~/.gemini/antigravity-cli/settings.json`), and no `session_start` or
+  `slash_commands:`, `output_styles:`, `settings:`, or `permissions:` (its settings and
+  permission allowlist live in the machine-global
+  `~/.gemini/antigravity-cli/settings.json`), and no `session_start` or
   `session_end` event. Bun Off warns and skips each. It also loads rules only from its primary
   instructions file, so every rule is inlined into a generated `GEMINI.md` and `rules[].category`
   and `rules[].globs` have no effect there. Per-agent `permissions:` raise an error, and a
   subagent `model:` is ignored because Antigravity subagents inherit the parent's model.
+
+- **Output styles are Claude Code only, by design.** OpenCode's nearest analogue is a primary
+  agent, but its prompt *replaces* the base system prompt rather than appending to it, so
+  `keep-coding-instructions: true` cannot be expressed there; Antigravity has no such surface at
+  all. Rather than translate into something that behaves differently, Bun Off warns and skips on
+  both. Write the OpenCode side explicitly as an `agents:` entry with `mode: primary`.
 
 - **Antigravity's own plugin format is not used.** Its `plugin.json` bundle (skills, agents,
   commands, MCP servers, and hooks) is discovered in the workspace, but Bun Off deploys those

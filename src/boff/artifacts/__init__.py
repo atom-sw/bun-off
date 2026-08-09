@@ -12,6 +12,7 @@ from boff.artifacts.event_hooks import (
     NativeHook,
 )
 from boff.artifacts.mcp_server import MCPServer
+from boff.artifacts.output_style import OutputStyle
 from boff.artifacts.permissions import Action, PermissionRule, Permissions
 from boff.artifacts.rule import Rule, Rules
 from boff.artifacts.settings import RESERVED_KEYS, Settings
@@ -19,12 +20,21 @@ from boff.artifacts.skill import SKILL_FILENAME, Skill, SkillFile, ships
 from boff.artifacts.slash_command import SlashCommand
 
 type Artifact = (
-    Rule | Rules | Skill | SlashCommand | MCPServer | Permissions | Agent | Settings | EventHooks
+    Rule
+    | Rules
+    | Skill
+    | SlashCommand
+    | OutputStyle
+    | MCPServer
+    | Permissions
+    | Agent
+    | Settings
+    | EventHooks
 )
 """Every artifact type ``Manifest.iter_artifacts`` can yield.
 
-The union is closed, so a ``match`` over it plus ``assert_never`` fails to type-check when a
-tenth artifact type appears.
+The union is closed, so a ``match`` over it plus ``assert_never`` fails to type-check when an
+eleventh artifact type appears.
 """
 
 # Artifact shapes describing the same manifest section in different forms. An adapter renders
@@ -47,6 +57,7 @@ __all__ = [
     "EventMapping",
     "MCPServer",
     "NativeHook",
+    "OutputStyle",
     "PermissionRule",
     "Permissions",
     "Rule",
@@ -56,4 +67,5 @@ __all__ = [
     "SkillFile",
     "SlashCommand",
     "ships",
+    "OutputStyle",
 ]

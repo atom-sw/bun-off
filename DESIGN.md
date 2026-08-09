@@ -195,6 +195,7 @@ The core markdown/raw types:
 | `Rules` | `rules: tuple[Rule, ...]` | — |
 | `Skill` | markdown string (`SKILL.md`) | `files: tuple[SkillFile, ...]` |
 | `SlashCommand` | markdown string | — |
+| `OutputStyle` | markdown string | — |
 | `MCPServer` | `raw: dict[str, dict]` (per-platform JSON) | — |
 | `Agent` | markdown string (prompt body) | `description`, `model: str \| dict[str, str] \| None`, `mode`, `permissions` |
 
@@ -205,6 +206,19 @@ all of them. A platform that reads a rules *directory* (Claude, OpenCode) render
 dispatches on artifact type, so each adapter simply declares which shape it can render, and the
 other is skipped with no branching in the deploy engine. `EventHooks` uses the same aggregate
 pattern for a different reason: its glue is per-platform, not per-hook.
+
+**An output style is Claude's alone, and stays that way.** An output style modifies the *system
+prompt* rather than adding context around it, which is a surface only Claude Code exposes. The
+tempting mapping is OpenCode's primary agent, and it is wrong: OpenCode composes its prompt as
+`agent.prompt ? [agent.prompt] : provider(model)`, so an agent's prompt *replaces* the base prompt
+and can never append to it. Claude's `keep-coding-instructions: true` therefore has no OpenCode
+encoding, and a translation would silently invert the author's intent. Two further reasons to
+refuse: the target path `.opencode/agents/<name>.md` already belongs to `agents:`, so translating
+would put two manifest sections on one file (see "One writer per file"), and the rendered agent
+would stay inert until `default_agent` was set by hand. Both other adapters therefore register
+`@renders(OutputStyle, drops=True)`. Authors who want the OpenCode behavior write it as an
+`agents:` entry with `mode: primary`, scoped with `available_on:` — the same paired-artifact
+recipe the format-on-edit hook uses.
 
 **A skill is one file or a whole folder.** Every platform discovers a skill as
 `<name>/SKILL.md`, and a real skill often carries more: reference documents it loads only when
@@ -736,7 +750,7 @@ that structurally cannot express an artifact is expected rather than newsworthy.
 | New plugin source | `src/boff/sources/<name>.py` | One line in `src/boff/sources/__init__.py` |
 | New manifest source | `src/boff/manifest_sources/<name>.py` | One line in `src/boff/manifest_sources/__init__.py` (`_SOURCES`, before the local catch-all) |
 | New tool installer | `src/boff/tool_installers/<name>.py` | One line in `src/boff/tool_installers/__init__.py` |
-| New artifact type | `src/boff/artifacts/<name>.py` | `@renders(<Type>)` method per supporting adapter + manifest schema field + an arm in `deploy.artifact_label` and in the `Artifact` union |
+| New artifact type | `src/boff/artifacts/<name>.py` | `@renders(<Type>)` method per supporting adapter + manifest schema field + a `_merge_named` line in `merge.py` + an arm in `deploy.artifact_label` and in the `Artifact` union |
 
 The registry keeps `cli.py`, `deploy.py`, `state.py`, and `manifest.py` untouched: `--platform`
 has no `choices=` list, validation defers to `get_adapter`, and state records owners as opaque

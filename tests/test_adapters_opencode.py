@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from boff.artifacts import (
     EventHook,
     EventHooks,
     MCPServer,
+    OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
@@ -332,9 +334,20 @@ def test_render_event_hooks_excludes_claude_scoped() -> None:
     assert adapter.render(eh, platform="opencode", scope=SCOPE) == []
 
 
+def test_render_output_style_warns_and_emits_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    adapter = OpenCodeAdapter()
+    style = OutputStyle(name="tutor", content="body")
+    with caplog.at_level(logging.WARNING):
+        ops = adapter.render(style, platform="opencode", scope=SCOPE)
+    assert ops == []
+    assert style.name in caplog.text
+    # The warning must point at the alternative, not just refuse.
+    assert "mode: primary" in caplog.text
+
+
 @pytest.mark.parametrize(
     "artifact_type",
-    [Rule, Skill, SlashCommand, MCPServer, Permissions, Agent, Settings, EventHooks],
+    [Rule, Skill, SlashCommand, OutputStyle, MCPServer, Permissions, Agent, Settings, EventHooks],
 )
 def test_adapter_supports_each_artifact_type(artifact_type: type) -> None:
     assert OpenCodeAdapter().supports(artifact_type)

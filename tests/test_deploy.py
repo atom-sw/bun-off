@@ -12,6 +12,7 @@ from boff.artifacts import (
     EventHook,
     EventHooks,
     MCPServer,
+    OutputStyle,
     Permissions,
     Rule,
     Rules,
@@ -195,6 +196,9 @@ def test_plan_units_keeps_units_that_emitted_nothing(
         ),
         pytest.param("antigravity", Rule, Support.SHADOWED, id="antigravity-shadows-each-rule"),
         pytest.param("antigravity", SlashCommand, Support.DROPPED, id="antigravity-drops-commands"),
+        pytest.param("claude", OutputStyle, Support.RENDERED, id="claude-renders-styles"),
+        pytest.param("opencode", OutputStyle, Support.DROPPED, id="opencode-drops-styles"),
+        pytest.param("antigravity", OutputStyle, Support.DROPPED, id="antigravity-drops-styles"),
         pytest.param("antigravity", Settings, Support.DROPPED, id="antigravity-drops-settings"),
         pytest.param("antigravity", Permissions, Support.DROPPED, id="antigravity-drops-perms"),
         pytest.param("antigravity", EventHook, Support.UNSUPPORTED, id="no-renderer-at-all"),
@@ -249,6 +253,9 @@ def test_an_adapter_renders_at_most_one_shape_per_equivalent_group(platform: str
         pytest.param(Rules(), "rules", id="rules"),
         pytest.param(Skill(name="format", content=""), "skill format", id="skill"),
         pytest.param(SlashCommand(name="lint", content=""), "slash command lint", id="command"),
+        pytest.param(
+            OutputStyle(name="tutor", content=""), "output style tutor", id="output-style"
+        ),
         pytest.param(MCPServer(name="ctx7", raw={}), "mcp server ctx7", id="mcp"),
         pytest.param(Permissions(), "permissions", id="permissions"),
         pytest.param(

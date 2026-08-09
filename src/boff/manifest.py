@@ -21,6 +21,7 @@ from boff.artifacts import (
     EventHook,
     EventHooks,
     MCPServer,
+    OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
@@ -44,6 +45,8 @@ MANIFEST_FILENAME = "boff.yaml"
 RULES_DIR = "rules"
 SKILLS_DIR = "skills"
 SLASH_COMMANDS_DIR = "slash_commands"
+# Underscored like its siblings; the Claude deploy target is the hyphenated ``output-styles``.
+OUTPUT_STYLES_DIR = "output_styles"
 MCP_SERVERS_DIR = "mcp_servers"
 MCP_RAW_DIR = "raw"
 AGENTS_DIR = "agents"
@@ -93,6 +96,7 @@ class Manifest:
     rules: tuple[Rule, ...] = ()
     skills: tuple[Skill, ...] = ()
     slash_commands: tuple[SlashCommand, ...] = ()
+    output_styles: tuple[OutputStyle, ...] = ()
     mcp_servers: tuple[MCPServer, ...] = ()
     plugins: tuple[Plugin, ...] = ()
     tool_files: dict[str, tuple[Path, ...]] = field(default_factory=dict[str, tuple[Path, ...]])
@@ -115,6 +119,7 @@ class Manifest:
             yield Rules(rules=tuple(self.rules))
         yield from self.skills
         yield from self.slash_commands
+        yield from self.output_styles
         yield from self.mcp_servers
         if self.permissions is not None:
             yield self.permissions
@@ -245,7 +250,8 @@ def _load_skills(root: Path, entries: list[Any]) -> tuple[Skill, ...]:
     """Load skill entries, accepting either a single markdown file or a skill directory.
 
     A skill directory ships supporting files (references, templates) alongside its
-    ``SKILL.md``; nothing under it is filtered out, so the author decides what ships.
+    ``SKILL.md``; only build and editor droppings are filtered out (see
+    :func:`boff.artifacts.skill.ships`), so the author decides what ships.
     """
     skills: list[Skill] = []
     for entry in entries:
@@ -602,6 +608,9 @@ def _load_own(root: Path, raw: dict[str, Any]) -> Manifest:
     slash_commands = _load_simple_artifacts(
         root, SLASH_COMMANDS_DIR, raw.get("slash_commands") or [], SlashCommand
     )
+    output_styles = _load_simple_artifacts(
+        root, OUTPUT_STYLES_DIR, raw.get("output_styles") or [], OutputStyle
+    )
     mcp_servers = _load_mcp_servers(root, raw.get("mcp_servers") or [])
     permissions = _load_permissions(raw.get("permissions") or {})
     agents = _load_agents(root, raw.get("agents") or [])
@@ -624,6 +633,7 @@ def _load_own(root: Path, raw: dict[str, Any]) -> Manifest:
         rules=rules,
         skills=skills,
         slash_commands=slash_commands,
+        output_styles=output_styles,
         mcp_servers=mcp_servers,
         plugins=plugins,
         tool_files=tool_files,

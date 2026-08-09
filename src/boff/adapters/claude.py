@@ -9,6 +9,7 @@ from boff.artifacts import (
     Agent,
     EventHook,
     EventHooks,
+    OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
@@ -149,6 +150,28 @@ class ClaudeAdapter(PlatformAdapter):
                 content=content,
                 merge=MergeStrategy.OVERWRITE,
                 description=f"claude rule {artifact.name}",
+            )
+        ]
+
+    @renders(OutputStyle)
+    def _output_style(
+        self, artifact: OutputStyle, *, platform: str, scope: Scope
+    ) -> list[Operation]:
+        """Write an output style to ``.claude/output-styles/<name>.md``.
+
+        The body ships verbatim: Claude validates the frontmatter against a strict schema, so
+        boff must not inject keys of its own. Selecting the style is a separate act -- set
+        ``outputStyle`` through the ``settings:`` block.
+        """
+        del platform
+        root = require_workspace_root(scope)
+        target = root / self.layout.config_root / "output-styles" / f"{artifact.name}.md"
+        return [
+            FileOperation(
+                target=target,
+                content=artifact.content,
+                merge=MergeStrategy.OVERWRITE,
+                description=f"claude output style {artifact.name}",
             )
         ]
 

@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-09
+
+### Added
+
+- **`output_styles:`**, a new artifact type for Claude Code output styles. Each name resolves to
+  `output_styles/<name>.md` and deploys verbatim to `.claude/output-styles/<name>.md`, frontmatter
+  included: Claude validates that frontmatter against a strict schema, so Bun Off injects nothing
+  of its own. Selecting a style stays a separate act through `settings.claude.outputStyle`.
+  OpenCode and Antigravity CLI have no equivalent surface and warn and skip; the OpenCode analogue
+  is an `agents:` entry with `mode: primary`, which the manifest could already express.
+
 ## [0.3.1] - 2026-07-27
 
 ### Fixed
@@ -113,7 +124,8 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/atom-sw/bun-off/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/atom-sw/bun-off/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/atom-sw/bun-off/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/atom-sw/bun-off/compare/v0.1.3...v0.2.0

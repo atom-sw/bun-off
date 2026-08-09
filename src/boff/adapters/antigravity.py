@@ -22,6 +22,7 @@ from boff.artifacts import (
     Agent,
     EventHook,
     EventHooks,
+    OutputStyle,
     Permissions,
     Rules,
     Settings,
@@ -256,6 +257,23 @@ class AntigravityAdapter(PlatformAdapter):
         _log.warning(
             "slash command %r has no Antigravity equivalent (its slash commands are built-in); "
             "skipping (scope it with available_on: [claude, opencode])",
+            artifact.name,
+        )
+        return []
+
+    @renders(OutputStyle, drops=True)
+    def _output_style(
+        self, artifact: OutputStyle, *, platform: str, scope: Scope
+    ) -> list[Operation]:
+        """Warn and skip: Antigravity has no output-style surface at all.
+
+        It exposes neither an output-style directory nor a system-prompt override; ``--mode``
+        is a closed enum and ``.agents/agents/`` holds subagents only.
+        """
+        del platform, scope
+        _log.warning(
+            "output style %r has no Antigravity equivalent (it has no output-style or "
+            "system-prompt override surface); skipping (scope it with available_on: [claude])",
             artifact.name,
         )
         return []
