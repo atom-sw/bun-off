@@ -27,6 +27,10 @@ META = "meta:\n  name: t\n  description: d\n"
 REMOTE_SUBDIR = "stack"
 REMOTE_NAME = "remote"
 
+# The minimum a SKILL.md needs to load: every platform discovers a skill through these keys,
+# and `_load_skills` rejects a file that omits them.
+SKILL_BODY = "---\nname: s\ndescription: A test skill.\n---\n\n# skill\n"
+
 # Supporting files of the `write_skill_dir` fixture's directory-form skill.
 SKILL_SUPPORT = {
     "references/contract.md": "# the contract\n",
@@ -57,6 +61,28 @@ def workspace_scope(tmp_path: Path, make_scope: Callable[[Path], Scope]) -> Scop
 
 
 @pytest.fixture
+def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Relocate ``$HOME`` and ``$XDG_CONFIG_HOME`` under ``tmp_path``.
+
+    Every global-scope path is resolved from these at call time, so a test that touches the
+    global scope must take this fixture or it would read and write the real user config.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    # `Path.home()` expands `~` from `$HOME` on POSIX, so setting the variable is enough.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    return home
+
+
+@pytest.fixture
+def global_scope(fake_home: Path) -> Scope:
+    """A user-level scope, with the home directory relocated under ``tmp_path``."""
+    del fake_home
+    return Scope(kind=ScopeKind.GLOBAL)
+
+
+@pytest.fixture
 def write_manifest() -> Callable[..., Path]:
     """Return a factory that writes a ``boff.yaml`` with valid meta plus ``body``.
 
@@ -83,7 +109,7 @@ def write_skill_dir() -> Callable[..., Path]:
     def _write(
         root: Path,
         name: str,
-        body: str = "# skill\n",
+        body: str = SKILL_BODY,
         support: Mapping[str, str] = SKILL_SUPPORT,
     ) -> Path:
         skill_root = root / "skills" / name

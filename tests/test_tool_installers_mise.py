@@ -5,6 +5,7 @@ import pytest
 from boff.tool_installers.base import ToolInstaller
 from boff.tool_installers.mise import MiseInstaller
 from boff.types import FileOperation, Scope, ScopeKind
+from tests.conftest import file_op
 
 _CONF_D = Path(".config") / "mise" / "conf.d"
 
@@ -30,7 +31,7 @@ def test_mise_installer_workspace_target(tmp_path: Path) -> None:
     assert op.target == workspace / _CONF_D / "boff-0.toml"
 
 
-def test_mise_installer_global_target(tmp_path: Path) -> None:
+def test_mise_installer_global_target(tmp_path: Path, fake_home: Path) -> None:
     mise_file = tmp_path / "mise.toml"
     mise_file.write_text("[tools]\nnode = '22'\n")
 
@@ -40,7 +41,7 @@ def test_mise_installer_global_target(tmp_path: Path) -> None:
     assert len(ops) == 1
     op = ops[0]
     assert isinstance(op, FileOperation)
-    assert op.target == Path.home() / _CONF_D / "boff-0.toml"
+    assert op.target == fake_home / _CONF_D / "boff-0.toml"
 
 
 def test_mise_installer_one_file_per_source(tmp_path: Path) -> None:
@@ -69,3 +70,16 @@ def test_mise_installer_workspace_scope_requires_root() -> None:
     scope = Scope(kind=ScopeKind.WORKSPACE, workspace_root=None)
     with pytest.raises(ValueError, match="workspace_root"):
         MiseInstaller().install_files([], scope=scope)
+
+
+def test_mise_installer_global_target_honors_xdg_config_home(
+    tmp_path: Path, fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mise_file = tmp_path / "mise.toml"
+    mise_file.write_text("[tools]\nnode = '22'\n")
+    elsewhere = fake_home / "somewhere-else"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(elsewhere))
+
+    ops = MiseInstaller().install_files([mise_file], scope=Scope(kind=ScopeKind.GLOBAL))
+
+    assert file_op(ops[0]).target == elsewhere / "mise" / "conf.d" / "boff-0.toml"

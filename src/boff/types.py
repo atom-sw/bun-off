@@ -46,6 +46,16 @@ class Scope:
     kind: ScopeKind
     workspace_root: Path | None = None
 
+    @property
+    def root(self) -> Path:
+        """The directory this scope is anchored to: the workspace root, or ``$HOME``.
+
+        This is what deploy state records paths relative to, and the boundary that pruning
+        empty parent directories stops at. A global scope has no workspace root, so it
+        anchors to the home directory that every platform's user-level config sits under.
+        """
+        return self.workspace_root if self.workspace_root is not None else Path.home()
+
 
 @dataclass(frozen=True)
 class FileOperation:

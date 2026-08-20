@@ -12,6 +12,7 @@ from boff.artifacts import (
     Rule,
     Skill,
     SlashCommand,
+    parse_frontmatter,
 )
 
 # Each factory builds one artifact type, forwarding availability kwargs, so the shared
@@ -141,3 +142,24 @@ def test_agent_permissions_for_filters_by_platform() -> None:
     )
     assert len(agent.permissions_for("claude")) == 1
     assert len(agent.permissions_for("opencode")) == 2
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(
+            "---\nname: s\ndescription: d\n---\n\nbody",
+            {"name": "s", "description": "d"},
+            id="well-formed",
+        ),
+        pytest.param("# body only\n", None, id="no-opening-fence"),
+        pytest.param("\n---\nname: s\n---\n", None, id="fence-not-on-first-line"),
+        pytest.param("---\nname: s\nno closing fence\n", None, id="unclosed-fence"),
+        pytest.param("---\n---\nbody", {}, id="empty-block"),
+        pytest.param("---\njust a string\n---\nbody", {}, id="block-is-not-a-mapping"),
+    ],
+)
+def test_parse_frontmatter_reads_only_a_leading_closed_block(
+    content: str, expected: dict[str, object] | None
+) -> None:
+    assert parse_frontmatter(content) == expected

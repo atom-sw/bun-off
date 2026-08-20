@@ -7,6 +7,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-20
+
+### Added
+
+- **A global (user-level) install scope.** `boff deploy`, `boff check`, and `boff clean` accept
+  `--global`, which targets your user-level configuration instead of the current workspace.
+  The two scopes are complementary and independent: each records its own state
+  (`~/.boff/state.json` against `<project>/.boff/state.json`) and its own manifest stack — so a
+  personal stack deployed once per machine coexists with a project stack deployed per repository.
+- Antigravity CLI gains user-level configuration features it does not possess at the workspace level:
+  `skills:`, `agents:`,  `mcp_servers:`, `event_hooks:` and `plugins:` all deploy to
+  `~/.gemini/config/`, and `settings:` merges into `~/.gemini/antigravity-cli/settings.json`.
+- Antigravity CLI also reads rules at user level, which it does not do in a workspace. A global
+  deploy writes one aggregate `~/.gemini/config/rules/boff.md`.
+- Skills are validated when the manifest loads: a `SKILL.md` must declare `name` and a non-empty
+  `description`.
+
+### Changed
+
+- The `mise` tool installer now honors `$XDG_CONFIG_HOME` for a global install, instead of
+  assuming `~/.config`.
+- `boff check`'s `dropped` status now means "the platform has no target for this artifact *in
+  this scope*". A surface can exist at one level and not the other, in both directions.
+
+### Fixed
+
+- `--wipe` is refused together with `--global`. A wipe deletes a platform's whole configuration
+  directory, which would be the whole `~/.claude` at global level, but that directory also stores
+  credentials and session history. Use `boff clean --global`, which removes only Bun Off's own
+  recorded footprint.
+
+### Known limitations
+
+- `mcp_servers:` are dropped for Claude Code at user level. Its only user-scope target,
+  `~/.claude.json`, holds OAuth credentials and is rewritten by every session, and Bun Off merges
+  by rewriting the whole file. Use `claude mcp add --scope user`.
+- OpenCode's user-level rules directory is flat: a relative `instructions` glob resolves against
+  whichever project you are in, so Bun Off registers an absolute entry, and OpenCode globs only
+  its last path segment. A rule with a `category:` still deploys, with a warning.
+- `permissions:` are dropped for Antigravity CLI in every scope. It does hold user-level
+  permissions, but the JSON key they live under is not established, and a wrong guess would
+  deploy settings the tool ignores while `boff check` reported success.
+- A `plugins:` entry using `source: local` has no user-level target and is skipped, with a
+  warning, by a global deploy.
+
 ## [0.4.0] - 2026-08-09
 
 ### Added
@@ -124,7 +169,8 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/atom-sw/bun-off/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/atom-sw/bun-off/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/atom-sw/bun-off/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/atom-sw/bun-off/compare/v0.2.0...v0.3.0

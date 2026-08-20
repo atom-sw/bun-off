@@ -5,7 +5,12 @@ from __future__ import annotations
 import logging
 from typing import ClassVar
 
-from boff.adapters.base import PlatformAdapter, frontmatter_block, renders
+from boff.adapters.base import (
+    PlatformAdapter,
+    frontmatter_block,
+    renders,
+    require_rules_dir,
+)
 from boff.artifacts import (
     Agent,
     EventHook,
@@ -21,9 +26,8 @@ from boff.platform_layout import (
     OPENCODE_LAYOUT,
     PlatformLayout,
     opencode_instructions_glob_op,
-    require_workspace_root,
 )
-from boff.types import FileOperation, MergeStrategy, Operation, Scope
+from boff.types import FileOperation, MergeStrategy, Operation, Scope, ScopeKind
 
 _OC_TOOL = {
     "bash": "bash",
@@ -161,20 +165,31 @@ class OpenCodeAdapter(PlatformAdapter):
                 "scope will not be enforced (deploying unscoped)",
                 artifact.name,
             )
-        root = require_workspace_root(scope)
-        parts = [self.layout.config_root, "rules"]
+        paths = self.layout.paths(scope)
+        rules_dir = require_rules_dir(paths, self.name)
+        subdir = rules_dir
         if artifact.category:
-            parts.append(artifact.category)
-        parts.append(f"{artifact.name}.md")
-        file_target = root.joinpath(*parts)
+            # A user-level `instructions` entry can only glob its last path segment, so the
+            # global rules directory has to stay flat. Rule names are unique per manifest
+            # (merge is keyed by name), so dropping the category cannot collide.
+            if scope.kind is ScopeKind.GLOBAL:
+                _log.warning(
+                    "rule %r has category %r but OpenCode's user-level instructions glob "
+                    "cannot recurse; deploying it flat into %s",
+                    artifact.name,
+                    artifact.category,
+                    rules_dir,
+                )
+            else:
+                subdir = rules_dir / artifact.category
         return [
             FileOperation(
-                target=file_target,
+                target=subdir / f"{artifact.name}.md",
                 content=artifact.content,
                 merge=MergeStrategy.OVERWRITE,
                 description=f"opencode rule {artifact.name}",
             ),
-            opencode_instructions_glob_op(root),
+            opencode_instructions_glob_op(paths),
         ]
 
     @renders(Permissions)
@@ -183,11 +198,11 @@ class OpenCodeAdapter(PlatformAdapter):
     ) -> list[Operation]:
         """Merge permission rules into ``opencode.json`` under ``permission``."""
         del platform
-        root = require_workspace_root(scope)
+        settings = self.layout.paths(scope).require_settings(self.name)
         permission = _opencode_permission_block(artifact.rules_for("opencode"))
         return [
             FileOperation(
-                target=self.layout.settings_path(root),
+                target=settings,
                 content=dumps_json({"permission": permission}),
                 merge=MergeStrategy.MERGE,
                 description="opencode permissions",
@@ -201,11 +216,11 @@ class OpenCodeAdapter(PlatformAdapter):
         hooks = artifact.hooks_for("opencode")
         if not hooks:
             return []
-        root = require_workspace_root(scope)
-        ops: list[Operation] = list(self._hook_script_ops(hooks, root))
+        paths = self.layout.paths(scope)
+        ops: list[Operation] = list(self._hook_script_ops(hooks, paths.hooks_dir))
         ops.append(
             FileOperation(
-                target=root / self.layout.config_root / "plugins" / "boff-hooks.js",
+                target=paths.config_root / "plugins" / "boff-hooks.js",
                 content=_opencode_plugin(hooks),
                 merge=MergeStrategy.OVERWRITE,
                 description="opencode event-hook plugin",
@@ -236,7 +251,7 @@ class OpenCodeAdapter(PlatformAdapter):
     def _agent(self, artifact: Agent, *, platform: str, scope: Scope) -> list[Operation]:
         """Write a subagent to ``.opencode/agents/<name>.md`` with frontmatter."""
         del platform
-        root = require_workspace_root(scope)
+        agents_dir = self.layout.paths(scope).agents_dir
         frontmatter: dict[str, object] = {"description": artifact.description}
         if artifact.mode is not None:
             frontmatter["mode"] = artifact.mode
@@ -248,7 +263,7 @@ class OpenCodeAdapter(PlatformAdapter):
             frontmatter["permission"] = permission
         return [
             FileOperation(
-                target=root / self.layout.config_root / "agents" / f"{artifact.name}.md",
+                target=agents_dir / f"{artifact.name}.md",
                 content=frontmatter_block(frontmatter) + artifact.content,
                 merge=MergeStrategy.OVERWRITE,
                 description=f"opencode agent {artifact.name}",

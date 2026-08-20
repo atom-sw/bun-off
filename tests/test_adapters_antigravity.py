@@ -366,12 +366,14 @@ def test_render_output_style_warns_and_emits_nothing(caplog: pytest.LogCaptureFi
     assert style.name in caplog.text
 
 
-def test_render_settings_warns_and_emits_nothing(caplog: pytest.LogCaptureFixture) -> None:
+def test_render_settings_in_a_workspace_warns_and_emits_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     adapter = AntigravityAdapter()
     with caplog.at_level(logging.WARNING):
         ops = render(adapter, Settings(raw={PLATFORM: {"colorScheme": "light"}}))
     assert ops == []
-    assert "global" in caplog.text
+    assert "user-level" in caplog.text
 
 
 def test_render_permissions_warns_and_emits_nothing(caplog: pytest.LogCaptureFixture) -> None:
@@ -380,7 +382,7 @@ def test_render_permissions_warns_and_emits_nothing(caplog: pytest.LogCaptureFix
     with caplog.at_level(logging.WARNING):
         ops = render(adapter, Permissions(rules=rules))
     assert ops == []
-    assert "global" in caplog.text
+    assert "not established" in caplog.text
 
 
 def test_render_settings_for_another_platform_is_silent(caplog: pytest.LogCaptureFixture) -> None:
@@ -405,3 +407,75 @@ def test_adapter_supports_each_artifact_type(artifact_type: type) -> None:
 def test_native_roots_covers_the_config_root_and_the_generated_primary_file() -> None:
     roots = AntigravityAdapter().native_roots(SCOPE)
     assert set(roots) == {WORKSPACE / CONFIG_ROOT, WORKSPACE / PRIMARY}
+
+
+# --- global scope ----------------------------------------------------------------------------
+
+
+def _render_global(adapter: AntigravityAdapter, artifact: object, scope: Scope) -> list[Operation]:
+    return adapter.render(artifact, platform=PLATFORM, scope=scope)
+
+
+def test_global_rules_land_in_the_user_rules_directory_with_frontmatter(
+    global_scope: Scope, fake_home: Path
+) -> None:
+    adapter = AntigravityAdapter()
+    rules = (Rule(name="style", content="be terse"),)
+    ops = _render_global(adapter, Rules(rules=rules), global_scope)
+    op = file_op(ops[0])
+    assert op.target == fake_home / ".gemini" / "config" / "rules" / "boff.md"
+    # A bare file is silently skipped: agy only loads a rules file that declares a trigger.
+    assert text_of(op).startswith("---\ntrigger: always_on\n")
+    assert "be terse" in text_of(op)
+
+
+def test_workspace_rules_still_inline_into_the_primary_file() -> None:
+    adapter = AntigravityAdapter()
+    rules = (Rule(name="style", content="be terse"),)
+    op = file_op(render(adapter, Rules(rules=rules))[0])
+    assert op.target == WORKSPACE / "GEMINI.md"
+    assert not text_of(op).startswith("---")
+
+
+def test_global_settings_merge_into_the_user_settings_file(
+    global_scope: Scope, fake_home: Path
+) -> None:
+    adapter = AntigravityAdapter()
+    block = {"colorScheme": "light"}
+    ops = _render_global(adapter, Settings(raw={PLATFORM: block}), global_scope)
+    op = file_op(ops[0])
+    assert op.target == fake_home / ".gemini" / "antigravity-cli" / "settings.json"
+    assert op.merge is MergeStrategy.MERGE
+    assert json.loads(text_of(op)) == block
+
+
+def test_settings_are_dropped_in_a_workspace_but_not_globally(global_scope: Scope) -> None:
+    adapter = AntigravityAdapter()
+    assert adapter.drops(Settings, SCOPE)
+    assert not adapter.drops(Settings, global_scope)
+
+
+def test_permissions_stay_dropped_in_every_scope(global_scope: Scope) -> None:
+    adapter = AntigravityAdapter()
+    assert adapter.drops(Permissions, SCOPE)
+    assert adapter.drops(Permissions, global_scope)
+
+
+@pytest.mark.parametrize(
+    ("artifact", "relative"),
+    [
+        pytest.param(Skill(name="s", content="body"), "skills/s/SKILL.md", id="skill"),
+        pytest.param(Agent(name="a", description="d", content="body"), "agents/a.md", id="agent"),
+        pytest.param(
+            MCPServer(name="m", raw={PLATFORM: {"command": "srv"}}),
+            "mcp_config.json",
+            id="mcp-server",
+        ),
+    ],
+)
+def test_global_artifacts_land_in_the_customization_root(
+    artifact: object, relative: str, global_scope: Scope, fake_home: Path
+) -> None:
+    adapter = AntigravityAdapter()
+    ops = _render_global(adapter, artifact, global_scope)
+    assert file_op(ops[0]).target == fake_home / ".gemini" / "config" / relative

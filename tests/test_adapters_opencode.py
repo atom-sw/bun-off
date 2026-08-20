@@ -351,3 +351,68 @@ def test_render_output_style_warns_and_emits_nothing(caplog: pytest.LogCaptureFi
 )
 def test_adapter_supports_each_artifact_type(artifact_type: type) -> None:
     assert OpenCodeAdapter().supports(artifact_type)
+
+
+# --- global scope ----------------------------------------------------------------------------
+
+
+def test_global_rule_lands_in_the_user_rules_directory(
+    global_scope: Scope, fake_home: Path
+) -> None:
+    adapter = OpenCodeAdapter()
+    ops = adapter.render(Rule(name="x", content="body"), platform="opencode", scope=global_scope)
+    config_root = fake_home / ".config" / "opencode"
+    assert file_op(ops[0]).target == config_root / "rules" / "x.md"
+    assert file_op(ops[1]).target == config_root / "opencode.json"
+
+
+def test_global_rule_registers_a_tilde_prefixed_flat_glob(global_scope: Scope) -> None:
+    adapter = OpenCodeAdapter()
+    ops = adapter.render(Rule(name="x", content="body"), platform="opencode", scope=global_scope)
+    assert json.loads(text_of(ops[1])) == {"instructions": ["~/.config/opencode/rules/*.md"]}
+
+
+def test_global_rule_with_a_category_warns_and_deploys_flat(
+    global_scope: Scope, fake_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    adapter = OpenCodeAdapter()
+    with caplog.at_level(logging.WARNING):
+        ops = adapter.render(
+            Rule(name="x", content="body", category="dev"),
+            platform="opencode",
+            scope=global_scope,
+        )
+    # A user-level instructions entry cannot recurse, so the category cannot be honored.
+    assert file_op(ops[0]).target == fake_home / ".config" / "opencode" / "rules" / "x.md"
+    assert "cannot recurse" in caplog.text
+
+
+def test_every_global_rule_emits_an_identical_instructions_entry(global_scope: Scope) -> None:
+    # `json_deep_merge` replaces lists wholesale, so entries that differed per rule would
+    # clobber one another and only the last would survive.
+    adapter = OpenCodeAdapter()
+    entries = {
+        text_of(adapter.render(rule, platform="opencode", scope=global_scope)[1])
+        for rule in (
+            Rule(name="a", content="body"),
+            Rule(name="b", content="body", category="dev"),
+        )
+    }
+    assert len(entries) == 1
+
+
+@pytest.mark.parametrize(
+    ("artifact", "relative"),
+    [
+        pytest.param(Skill(name="s", content="body"), "skills/s/SKILL.md", id="skill"),
+        pytest.param(SlashCommand(name="c", content="body"), "commands/c.md", id="slash-command"),
+        pytest.param(Agent(name="a", description="d", content="body"), "agents/a.md", id="agent"),
+    ],
+)
+def test_global_artifacts_sit_directly_under_the_config_root(
+    artifact: object, relative: str, global_scope: Scope, fake_home: Path
+) -> None:
+    # No nested `.opencode/` at user level: the config root *is* the base directory.
+    adapter = OpenCodeAdapter()
+    ops = adapter.render(artifact, platform="opencode", scope=global_scope)
+    assert file_op(ops[0]).target == fake_home / ".config" / "opencode" / relative

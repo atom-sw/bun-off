@@ -145,8 +145,13 @@ def _replace_scope(
 
 
 def _scope_root(scope: Scope) -> Path:
-    """Resolve the root directory for a given scope, defaulting to the user's home."""
-    return scope.workspace_root if scope.workspace_root is not None else Path.home()
+    """Resolve the root directory for a given scope, defaulting to the user's home.
+
+    Recorded paths are stored relative to this root. With ``XDG_CONFIG_HOME`` pointing
+    outside the home directory, a global scope's entries come out as ``../`` paths; that is
+    cosmetic, since :func:`_abs` resolves them back to the same targets.
+    """
+    return scope.root
 
 
 def state_path(scope: Scope) -> Path:

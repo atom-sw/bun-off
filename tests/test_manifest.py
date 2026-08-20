@@ -1,10 +1,11 @@
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from boff.manifest import load_manifest
-from tests.conftest import SKILL_SUPPORT
+from tests.conftest import SKILL_BODY, SKILL_SUPPORT
 
 # Factory signatures for the `write_manifest` and `write_skill_dir` fixtures (see conftest.py).
 WriteManifest = Callable[..., Path]
@@ -51,7 +52,7 @@ def test_manifest_rejects_non_list_globs(tmp_path: Path, write_manifest: WriteMa
 def test_flat_and_directory_skills_load_the_same_body(
     tmp_path: Path, write_manifest: WriteManifest, write_skill_dir: WriteSkillDir
 ) -> None:
-    body = "# shared body\n"
+    body = SKILL_BODY
     flat, nested = tmp_path / "flat", tmp_path / "nested"
     (flat / "skills").mkdir(parents=True)
     (flat / "skills" / "s.md").write_text(body)
@@ -114,7 +115,7 @@ def test_flat_skill_carries_no_supporting_files(
     tmp_path: Path, write_manifest: WriteManifest
 ) -> None:
     (tmp_path / "skills").mkdir()
-    (tmp_path / "skills" / "s.md").write_text("body")
+    (tmp_path / "skills" / "s.md").write_text(SKILL_BODY)
     write_manifest(tmp_path, "skills:\n  - s\n")
     assert load_manifest(tmp_path).skills[0].files == ()
 
@@ -127,6 +128,63 @@ def test_skill_directory_without_an_entry_point_raises(
     write_manifest(tmp_path, "skills:\n  - s\n")
     with pytest.raises(FileNotFoundError, match="no entry point"):
         load_manifest(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        pytest.param("# no frontmatter\n", "no YAML frontmatter", id="no-frontmatter-at-all"),
+        pytest.param(
+            "---\nname: s\n---\n\n# body\n", "missing description", id="missing-description"
+        ),
+        pytest.param(
+            "---\ndescription: A skill.\n---\n\n# body\n", "missing name", id="missing-name"
+        ),
+        pytest.param(
+            "---\nname: s\ndescription: '  '\n---\n\n# body\n",
+            "missing description",
+            id="blank-description",
+        ),
+        pytest.param("---\nname: s\n\n# body\n", "no YAML frontmatter", id="unclosed-fence"),
+    ],
+)
+def test_skill_without_loadable_frontmatter_raises(
+    body: str, match: str, tmp_path: Path, write_manifest: WriteManifest
+) -> None:
+    """A skill no platform would load is an error, not a silent no-op.
+
+    Without this the skill deploys, `boff check` reports `ok`, and every platform skips the
+    file: the author gets a green light on an artifact that never loads.
+    """
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "skills" / "s.md").write_text(body)
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    with pytest.raises(ValueError, match=match):
+        load_manifest(tmp_path)
+
+
+def test_directory_skill_frontmatter_is_validated_too(
+    tmp_path: Path, write_manifest: WriteManifest, write_skill_dir: WriteSkillDir
+) -> None:
+    write_skill_dir(tmp_path, "s", body="# no frontmatter\n")
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    with pytest.raises(ValueError, match="no YAML frontmatter"):
+        load_manifest(tmp_path)
+
+
+def test_skill_frontmatter_naming_itself_differently_warns_but_loads(
+    tmp_path: Path, write_manifest: WriteManifest, caplog: pytest.LogCaptureFixture
+) -> None:
+    # boff names the deployed directory from the manifest, so the two disagree on disk.
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "skills" / "s.md").write_text(
+        "---\nname: other\ndescription: A skill.\n---\n\n# body\n"
+    )
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    with caplog.at_level(logging.WARNING):
+        skills = load_manifest(tmp_path).skills
+    assert skills[0].name == "s"
+    assert "other" in caplog.text
 
 
 def test_skill_present_as_both_file_and_directory_raises(

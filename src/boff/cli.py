@@ -141,6 +141,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not add deployed artifacts to the workspace .gitignore.",
     )
+    deploy_cmd.add_argument(
+        "--global",
+        dest="use_global",
+        action="store_true",
+        help="Target your user-level configuration instead of the current workspace.",
+    )
 
     _add_check_parser(sub)
     _add_clean_parser(sub)
@@ -171,6 +177,12 @@ def _add_check_parser(sub: SubParsers) -> None:
         action="store_false",
         help="Skip checking that each platform's CLI binary is on PATH.",
     )
+    check_cmd.add_argument(
+        "--global",
+        dest="use_global",
+        action="store_true",
+        help="Target your user-level configuration instead of the current workspace.",
+    )
 
 
 def _add_clean_parser(sub: SubParsers) -> None:
@@ -196,6 +208,12 @@ def _add_clean_parser(sub: SubParsers) -> None:
     )
     clean_cmd.add_argument(
         "--no-ignore", action="store_true", help="Do not update the workspace .gitignore."
+    )
+    clean_cmd.add_argument(
+        "--global",
+        dest="use_global",
+        action="store_true",
+        help="Target your user-level configuration instead of the current workspace.",
     )
 
 
@@ -302,9 +320,28 @@ def main(argv: Sequence[str] | None = None) -> ExitCode:
         return ExitCode.ERROR
 
 
-def _scope(root: Path | None) -> Scope:
-    """Create a workspace scope from a root path."""
+def _scope(root: Path | None, *, use_global: bool = False) -> Scope:
+    """Create the deploy scope: user-level, or a workspace rooted at ``root``."""
+    if use_global:
+        if root is not None:
+            raise _UsageError("--global cannot be combined with --root")
+        return Scope(kind=ScopeKind.GLOBAL)
     return Scope(kind=ScopeKind.WORKSPACE, workspace_root=root or Path.cwd())
+
+
+def _reject_global_wipe(args: argparse.Namespace) -> None:
+    """Refuse ``--wipe`` at user level: the native roots hold state boff never created.
+
+    A global wipe would delete each platform's whole config directory, and for Claude that is
+    ``~/.claude`` -- which also holds credentials, session history, and per-project state that
+    no manifest can regenerate. ``--clean`` removes boff's own recorded footprint instead.
+    """
+    if args.use_global and args.wipe:
+        raise _UsageError(
+            "--wipe cannot be combined with --global: it would delete your entire user-level "
+            "configuration directory, including credentials and session history that boff did "
+            "not create; use --clean to remove only what boff installed"
+        )
 
 
 @cache
@@ -521,7 +558,8 @@ def _cmd_deploy(args: argparse.Namespace) -> ExitCode:
     authoritative: adding or removing a manifest re-deploys the whole merged result rather
     than layering onto what is already installed.
     """
-    scope = _scope(None)
+    _reject_global_wipe(args)
+    scope = _scope(None, use_global=args.use_global)
     sp = state_path(scope)
     prior = load_state(sp)
     refs = _resolve_stack(
@@ -573,7 +611,7 @@ def _cmd_deploy(args: argparse.Namespace) -> ExitCode:
 
 def _cmd_check(args: argparse.Namespace) -> ExitCode:
     """Verify the workspace still matches what a deploy of this stack would write."""
-    scope = _scope(None)
+    scope = _scope(None, use_global=args.use_global)
     sp = state_path(scope)
     prior = load_state(sp)
     refs = _resolve_stack(recorded_stack(prior, scope), args.paths, [], [])
@@ -653,7 +691,8 @@ def _display_path(target: Path) -> str:
 
 def _cmd_clean(args: argparse.Namespace) -> ExitCode:
     """Remove boff's recorded footprint (or wipe native config) for the scope."""
-    scope = _scope(args.root)
+    _reject_global_wipe(args)
+    scope = _scope(args.root, use_global=args.use_global)
     sp = state_path(scope)
     prior = load_state(sp)
     platforms: list[str] = args.platforms or []

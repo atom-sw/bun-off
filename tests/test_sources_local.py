@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -30,3 +31,20 @@ def test_local_source_mirrors_tree(tmp_path: Path) -> None:
 
     targets = sorted(file_op(op).target for op in ops)
     assert targets == [workspace / "a.txt", workspace / "sub" / "b.txt"]
+
+
+def test_local_source_warns_and_skips_at_user_level(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # There is no user-level analogue of "copy this subtree to the deploy root", so the plugin
+    # is skipped rather than aborting a deploy whose other artifacts are global by design.
+    src_root = tmp_path / "src-tree"
+    src_root.mkdir()
+    (src_root / "a.txt").write_text("alpha")
+
+    spec = LocalSpec(source="local", path=src_root)
+    with caplog.at_level(logging.WARNING):
+        ops = LocalSource().install(spec, platform="claude", scope=Scope(kind=ScopeKind.GLOBAL))
+
+    assert ops == []
+    assert "no user-level target" in caplog.text

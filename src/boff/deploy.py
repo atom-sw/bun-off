@@ -93,10 +93,10 @@ def artifact_label(artifact: Artifact) -> str:
     return label
 
 
-def _support(adapter: PlatformAdapter, kind: type[Any]) -> Support:
-    """Classify how ``adapter`` treats artifacts of type ``kind``."""
+def _support(adapter: PlatformAdapter, kind: type[Any], scope: Scope) -> Support:
+    """Classify how ``adapter`` treats artifacts of type ``kind`` in ``scope``."""
     if adapter.supports(kind):
-        return Support.DROPPED if adapter.drops(kind) else Support.RENDERED
+        return Support.DROPPED if adapter.drops(kind, scope) else Support.RENDERED
     shadowed = any(
         kind in group and any(adapter.supports(other) for other in group - {kind})
         for group in EQUIVALENT_SHAPES
@@ -108,7 +108,7 @@ def _artifact_unit(
     adapter: PlatformAdapter, artifact: Artifact, platform: str, scope: Scope
 ) -> PlannedUnit:
     """Plan one artifact for one platform, recording how the adapter treats its type."""
-    support = _support(adapter, type(artifact))
+    support = _support(adapter, type(artifact), scope)
     ops = (
         adapter.render(artifact, platform=platform, scope=scope)
         if support in {Support.RENDERED, Support.DROPPED}
@@ -189,7 +189,7 @@ def deploy_plan(
 def wipe_ops(scope: Scope, platforms: list[str]) -> list[Operation]:
     """Ops that delete each platform's native config roots wholesale (destructive)."""
     ops: list[Operation] = []
-    boundary = scope.workspace_root
+    boundary = scope.root
     for platform in platforms:
         for root in get_adapter(platform).native_roots(scope):
             ops.append(

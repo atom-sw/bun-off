@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -367,3 +368,59 @@ def test_render_event_hooks_excludes_opencode_scoped() -> None:
 )
 def test_adapter_supports_each_artifact_type(artifact_type: type) -> None:
     assert ClaudeAdapter().supports(artifact_type)
+
+
+# --- global scope ----------------------------------------------------------------------------
+
+
+def test_global_rule_keeps_its_category_subdirectory(global_scope: Scope, fake_home: Path) -> None:
+    adapter = ClaudeAdapter()
+    ops = adapter.render(
+        Rule(name="x", content="body", category="dev"), platform="claude", scope=global_scope
+    )
+    assert file_op(ops[0]).target == fake_home / ".claude" / "rules" / "dev" / "x.md"
+
+
+@pytest.mark.parametrize(
+    ("artifact", "relative"),
+    [
+        pytest.param(Skill(name="s", content="body"), "skills/s/SKILL.md", id="skill"),
+        pytest.param(SlashCommand(name="c", content="body"), "commands/c.md", id="slash-command"),
+        pytest.param(OutputStyle(name="o", content="body"), "output-styles/o.md", id="style"),
+        pytest.param(Agent(name="a", description="d", content="body"), "agents/a.md", id="agent"),
+    ],
+)
+def test_global_artifacts_land_under_the_user_config_root(
+    artifact: object, relative: str, global_scope: Scope, fake_home: Path
+) -> None:
+    adapter = ClaudeAdapter()
+    ops = adapter.render(artifact, platform="claude", scope=global_scope)
+    assert file_op(ops[0]).target == fake_home / ".claude" / relative
+
+
+def test_global_settings_merge_into_the_user_settings_file(
+    global_scope: Scope, fake_home: Path
+) -> None:
+    adapter = ClaudeAdapter()
+    ops = adapter.render(
+        Settings(raw={"claude": {"outputStyle": "Explanatory"}}),
+        platform="claude",
+        scope=global_scope,
+    )
+    op = file_op(ops[0])
+    assert op.target == fake_home / ".claude" / "settings.json"
+    assert op.merge is MergeStrategy.MERGE
+
+
+def test_global_mcp_server_warns_and_emits_nothing(
+    global_scope: Scope, caplog: pytest.LogCaptureFixture
+) -> None:
+    adapter = ClaudeAdapter()
+    server = MCPServer(name="ctx", raw={"claude": {"command": "ctx-server"}})
+    with caplog.at_level(logging.WARNING):
+        ops = adapter.render(server, platform="claude", scope=global_scope)
+    assert ops == []
+    # The only user-scope target is the credential-bearing `~/.claude.json`.
+    assert "~/.claude.json" in caplog.text
+    assert adapter.drops(MCPServer, global_scope)
+    assert not adapter.drops(MCPServer, SCOPE)

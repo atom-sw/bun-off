@@ -823,3 +823,129 @@ def test_check_reports_drift_when_a_supporting_file_is_edited(
     # The finding must name the supporting file, not just the skill it belongs to.
     assert f"drifted   skill {SKILL_NAME}" in out
     assert str(target.relative_to(workspace)) in out
+
+
+# --- global scope ----------------------------------------------------------------------------
+
+
+def test_global_deploy_writes_into_the_user_config_and_leaves_the_workspace_alone(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    rc = main(["deploy", str(sample_manifest), "--platform", "claude", "--global"])
+    capsys.readouterr()
+    assert rc == ExitCode.OK
+    assert (fake_home / ".claude" / "rules" / "dev-essentials" / "style.md").is_file()
+    assert not (tmp_path / ".claude").exists()
+    # The only user-scope MCP target holds credentials, so boff never writes one.
+    assert not (fake_home / ".mcp.json").exists()
+    assert not (fake_home / ".claude.json").exists()
+
+
+def test_global_deploy_records_state_beside_the_home_directory(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["deploy", str(sample_manifest), "--platform", "claude", "--global"]) == ExitCode.OK
+    capsys.readouterr()
+    assert (fake_home / ".boff" / "state.json").is_file()
+    assert not (tmp_path / ".boff").exists()
+
+
+def test_global_deploy_writes_no_gitignore(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["deploy", str(sample_manifest), "--platform", "claude", "--global"]) == ExitCode.OK
+    capsys.readouterr()
+    assert not (fake_home / ".gitignore").exists()
+    assert not (tmp_path / ".gitignore").exists()
+
+
+def test_global_check_passes_after_a_global_deploy(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+) -> None:
+    del fake_home
+    monkeypatch.chdir(tmp_path)
+    assert main(["deploy", str(sample_manifest), "--platform", "claude", "--global"]) == ExitCode.OK
+    rc = main(["check", str(sample_manifest), "--platform", "claude", "--global", "--no-probe"])
+    capsys.readouterr()
+    assert rc == ExitCode.OK
+
+
+def test_global_clean_removes_the_user_level_footprint(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_home: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["deploy", str(sample_manifest), "--platform", "claude", "--global"]) == ExitCode.OK
+    rule = fake_home / ".claude" / "rules" / "dev-essentials" / "style.md"
+    assert rule.is_file()
+    assert main(["clean", "--global"]) == ExitCode.OK
+    capsys.readouterr()
+    assert not rule.exists()
+
+
+def test_the_two_scopes_keep_separate_state_and_do_not_clean_each_other(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    fake_home: Path,
+) -> None:
+    workspace = fake_home / "project"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    assert main(["deploy", str(sample_manifest), "--platform", "claude", "--global"]) == ExitCode.OK
+    assert main(["deploy", str(sample_manifest), "--platform", "claude"]) == ExitCode.OK
+    capsys.readouterr()
+    global_rule = fake_home / ".claude" / "rules" / "dev-essentials" / "style.md"
+    workspace_rule = workspace / ".claude" / "rules" / "dev-essentials" / "style.md"
+    assert global_rule.is_file()
+    assert workspace_rule.is_file()
+    # Cleaning the workspace leaves the user-level deploy standing.
+    assert main(["clean"]) == ExitCode.OK
+    capsys.readouterr()
+    assert global_rule.is_file()
+    assert not workspace_rule.exists()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["deploy", "--global", "--wipe", "--platform", "claude"], id="deploy"),
+        pytest.param(["clean", "--global", "--wipe", "--platform", "claude"], id="clean"),
+    ],
+)
+def test_global_wipe_is_a_usage_error(
+    argv: list[str], capsys: pytest.CaptureFixture[str], fake_home: Path
+) -> None:
+    del fake_home
+    # A global wipe would delete `~/.claude`, credentials and session history included.
+    assert main(argv) == ExitCode.USAGE
+    assert "--wipe cannot be combined with --global" in capsys.readouterr().err
+
+
+def test_global_with_root_is_a_usage_error(
+    capsys: pytest.CaptureFixture[str], fake_home: Path
+) -> None:
+    assert main(["clean", "--global", "--root", str(fake_home)]) == ExitCode.USAGE
+    assert "--global cannot be combined with --root" in capsys.readouterr().err

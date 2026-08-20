@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
 from boff.errors import BoffError
 from boff.sources.base import PluginSource, PluginSpec, installs_for
-from boff.types import FileOperation, MergeStrategy, Operation, Scope
+from boff.types import FileOperation, MergeStrategy, Operation, Scope, ScopeKind
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -26,7 +29,22 @@ class LocalSource(PluginSource):
     spec_class: ClassVar[type[PluginSpec]] = LocalSpec
 
     def _mirror(self, spec: LocalSpec, *, scope: Scope) -> list[Operation]:
-        """Mirror the local subtree file-by-file into the workspace root."""
+        """Mirror the local subtree file-by-file into the workspace root.
+
+        Workspace-only: the spec names a subtree to copy verbatim to the deploy root, and no
+        user-level directory is an equivalent target. Mirroring an arbitrary tree into the home
+        directory would write wherever the bundle author happened to point it.
+        """
+        if scope.kind is ScopeKind.GLOBAL:
+            # Warn and skip rather than abort, so one bundle stays deployable in both scopes:
+            # a manifest that mixes user-level rules with a workspace plugin is the normal case.
+            _log.warning(
+                "plugin source 'local' (%s) has no user-level target and is not deployed; "
+                "mirroring an arbitrary subtree into the home directory would write wherever "
+                "the bundle points it. Deploy this plugin to a workspace instead.",
+                spec.path,
+            )
+            return []
         if scope.workspace_root is None:
             raise ValueError("local source requires workspace_root to be set on the scope")
         root = spec.path

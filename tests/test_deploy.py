@@ -31,8 +31,10 @@ from boff.deploy import (
 )
 from boff.manifest import Manifest, ManifestMeta, Plugin, PluginInstall, load_manifest
 from boff.sources.local import LocalSpec
-from boff.types import FileOperation, Operation, Scope
+from boff.types import FileOperation, MergeStrategy, Operation, Scope, ScopeKind
 from tests.conftest import file_op
+
+BOTH_SCOPES = tuple(ScopeKind)
 
 DeployOps = Callable[[Manifest, str, Scope], list[Operation]]
 
@@ -187,27 +189,95 @@ def test_plan_units_keeps_units_that_emitted_nothing(
 
 
 @pytest.mark.parametrize(
-    ("platform", "kind", "expected"),
+    ("platform", "kind", "kinds", "expected"),
     [
-        pytest.param("claude", Rule, Support.RENDERED, id="claude-renders-each-rule"),
-        pytest.param("claude", Rules, Support.SHADOWED, id="claude-shadows-the-aggregate"),
+        pytest.param("claude", Rule, BOTH_SCOPES, Support.RENDERED, id="claude-renders-each-rule"),
         pytest.param(
-            "antigravity", Rules, Support.RENDERED, id="antigravity-renders-the-aggregate"
+            "claude", Rules, BOTH_SCOPES, Support.SHADOWED, id="claude-shadows-the-aggregate"
         ),
-        pytest.param("antigravity", Rule, Support.SHADOWED, id="antigravity-shadows-each-rule"),
-        pytest.param("antigravity", SlashCommand, Support.DROPPED, id="antigravity-drops-commands"),
-        pytest.param("claude", OutputStyle, Support.RENDERED, id="claude-renders-styles"),
-        pytest.param("opencode", OutputStyle, Support.DROPPED, id="opencode-drops-styles"),
-        pytest.param("antigravity", OutputStyle, Support.DROPPED, id="antigravity-drops-styles"),
-        pytest.param("antigravity", Settings, Support.DROPPED, id="antigravity-drops-settings"),
-        pytest.param("antigravity", Permissions, Support.DROPPED, id="antigravity-drops-perms"),
-        pytest.param("antigravity", EventHook, Support.UNSUPPORTED, id="no-renderer-at-all"),
+        pytest.param(
+            "antigravity",
+            Rules,
+            BOTH_SCOPES,
+            Support.RENDERED,
+            id="antigravity-renders-the-aggregate",
+        ),
+        pytest.param(
+            "antigravity",
+            Rule,
+            BOTH_SCOPES,
+            Support.SHADOWED,
+            id="antigravity-shadows-each-rule",
+        ),
+        pytest.param(
+            "antigravity",
+            SlashCommand,
+            BOTH_SCOPES,
+            Support.DROPPED,
+            id="antigravity-drops-commands",
+        ),
+        pytest.param(
+            "claude", OutputStyle, BOTH_SCOPES, Support.RENDERED, id="claude-renders-styles"
+        ),
+        pytest.param(
+            "opencode", OutputStyle, BOTH_SCOPES, Support.DROPPED, id="opencode-drops-styles"
+        ),
+        pytest.param(
+            "antigravity",
+            OutputStyle,
+            BOTH_SCOPES,
+            Support.DROPPED,
+            id="antigravity-drops-styles",
+        ),
+        pytest.param(
+            "antigravity",
+            Permissions,
+            BOTH_SCOPES,
+            Support.DROPPED,
+            id="antigravity-drops-perms-in-both-scopes",
+        ),
+        pytest.param(
+            "antigravity", EventHook, BOTH_SCOPES, Support.UNSUPPORTED, id="no-renderer-at-all"
+        ),
+        # Scope-dependent: a surface can exist at one level and not the other, in either
+        # direction. Antigravity's settings have only a user-level home; Claude's MCP config
+        # has only a workspace one.
+        pytest.param(
+            "antigravity",
+            Settings,
+            (ScopeKind.WORKSPACE,),
+            Support.DROPPED,
+            id="antigravity-drops-settings-in-a-workspace",
+        ),
+        pytest.param(
+            "antigravity",
+            Settings,
+            (ScopeKind.GLOBAL,),
+            Support.RENDERED,
+            id="antigravity-renders-settings-globally",
+        ),
+        pytest.param(
+            "claude",
+            MCPServer,
+            (ScopeKind.WORKSPACE,),
+            Support.RENDERED,
+            id="claude-renders-mcp-in-a-workspace",
+        ),
+        pytest.param(
+            "claude",
+            MCPServer,
+            (ScopeKind.GLOBAL,),
+            Support.DROPPED,
+            id="claude-drops-mcp-globally",
+        ),
     ],
 )
 def test_support_classifies_each_adapter_artifact_pair(
-    platform: str, kind: type[Any], expected: Support
+    platform: str, kind: type[Any], kinds: tuple[ScopeKind, ...], expected: Support
 ) -> None:
-    assert _support(get_adapter(platform), kind) is expected
+    for scope_kind in kinds:
+        scope = Scope(kind=scope_kind, workspace_root=Path("/ws"))
+        assert _support(get_adapter(platform), kind, scope) is expected
 
 
 @pytest.mark.parametrize("platform", adapter_names())
@@ -267,3 +337,29 @@ def test_an_adapter_renders_at_most_one_shape_per_equivalent_group(platform: str
 )
 def test_artifact_label_names_each_artifact_type(artifact: Artifact, expected: str) -> None:
     assert artifact_label(artifact) == expected
+
+
+@pytest.mark.parametrize("platform", adapter_names())
+def test_a_global_deploy_never_overwrites_the_users_instructions_file(
+    platform: str, global_scope: Scope
+) -> None:
+    """At user level, the platform's primary instructions file belongs to the user.
+
+    Claude's `~/.claude/CLAUDE.md` and OpenCode's `~/.config/opencode/AGENTS.md` are files
+    people hand-author, and OpenCode picks exactly one global instructions file from
+    `[~/.config/opencode/AGENTS.md, ~/.claude/CLAUDE.md]` -- so merely *creating* the former
+    would stop it reading the latter. Antigravity's global rules go to `rules/boff.md` instead.
+    """
+    manifest = Manifest(
+        root=Path("/manifest"),
+        meta=ManifestMeta(name="t", description="d"),
+        rules=(Rule(name="style", content="body"),),
+    )
+    ops = [op for ops in deploy_plan(manifest, [platform], global_scope).values() for op in ops]
+    overwritten = {
+        op.target
+        for op in ops
+        if isinstance(op, FileOperation) and op.merge is MergeStrategy.OVERWRITE
+    }
+    primary = get_adapter(platform).layout.paths(global_scope).primary
+    assert primary not in overwritten

@@ -87,7 +87,7 @@ class ClaudeAdapter(PlatformAdapter):
     def _rule(self, artifact: Rule, *, platform: str, scope: Scope) -> list[Operation]:
         ...
 
-    @renders(MCPServer)
+    @renders(MCPServer, drops={ScopeKind.GLOBAL})
     def _mcp_server(self, artifact: MCPServer, *, platform: str, scope: Scope) -> list[Operation]:
         ...
 ```
@@ -267,6 +267,53 @@ Files: `src/boff/artifacts/`.
 
 ---
 
+## Scope: workspace and user level
+
+A `Scope` names the deploy target: `WORKSPACE` (a project root) or `GLOBAL` (the user's own
+configuration). It is a CLI flag (`--global`), never a manifest field, so the same bundle can be
+deployed either way.
+
+**Global is not the workspace tree rehomed under `$HOME`.** Each platform's user-level layout
+differs structurally from its workspace one:
+
+- Claude keeps the same relative shape under `~/.claude/`, but `CLAUDE.md` moves *inside* the
+  config root, and it has no safe MCP target: user-scope servers live in `~/.claude.json`,
+  which holds OAuth credentials and is rewritten by every session.
+- OpenCode's config root *is* the base directory. Agents, commands, and skills sit directly
+  under `~/.config/opencode/`, not under a nested `.opencode/`.
+- Antigravity splits across two unrelated trees: customizations in `~/.gemini/config/`,
+  settings in `~/.gemini/antigravity-cli/settings.json`.
+
+So the layout does not hand out a root for callers to join strings onto. `PlatformLayout.paths(scope)`
+returns a `ScopePaths` of resolved absolute paths — one field per surface, `None` where the
+platform has no such surface *in that scope*. Adapters read `paths.skills_dir`; they never
+compute one. The global paths come from a `global_factory` callable rather than a stored value,
+because it reads `$HOME` and `$XDG_CONFIG_HOME` at call time, which is also what lets tests
+point them at a temporary directory.
+
+`Scope.root` (the workspace root, or `$HOME`) is what deploy state records paths relative to and
+what directory pruning stops at. It is a property of the scope, not of any platform, so it is
+deliberately absent from `ScopePaths`.
+
+### Support is scope-dependent
+
+A surface can exist in one scope and not the other, in **both** directions: Antigravity's
+settings have only a user-level home, while Claude's MCP config has only a workspace one. So
+`@renders(T, drops=...)` takes either `True` (drop everywhere) or a set of `ScopeKind`, and
+`PlatformAdapter.drops(artifact_type, scope)` answers per scope.
+
+An empty op list could not encode this: `verify` treats `ops == []` as "nothing to emit for this
+manifest", never as a deliberate drop. The declaration has to be separate from the output.
+
+### Why `--wipe` is refused at user level
+
+`--wipe` deletes a platform's whole native config directory. At user level that is `~/.claude`,
+which also holds credentials, session history, and per-project state that no manifest can
+regenerate. The CLI rejects the combination outright. `--clean` still works globally: it is
+driven by recorded state, so it removes only what boff wrote.
+
+---
+
 ## The deploy engine
 
 `plan_units(manifest, platforms, scope)` in `src/boff/deploy.py` is the primitive. It walks the
@@ -342,8 +389,14 @@ orphaned files behind and let merged config files (`.mcp.json`, `settings.json`,
 after it runs, the on-disk footprint matches the current manifest, and switching a project
 between manifests (for example a `design` stack and a `maintenance` stack) is a clean swap.
 
-The enabling primitive is a state record at `<root>/.boff/state.json` (`src/boff/state.py`),
-keyed by `(scope, owner)`. For each owner it stores:
+The enabling primitive is a state record at `<Scope.root>/.boff/state.json` (`src/boff/state.py`),
+keyed by `(scope, owner)`. Because the root *is* the scope's anchor, the two scopes land in
+different files — `<project>/.boff/state.json` and `~/.boff/state.json` — and are therefore
+independent by construction: a workspace clean cannot reach a user-level deploy, and neither can
+reconcile the other's files away. The `scope` half of the key (`str(scope.kind)`) still
+distinguishes them inside a file, for the case where a workspace root *is* the home directory.
+
+For each owner it stores:
 
 - `files`: targets boff wrote with `OVERWRITE` (rules, skills, agents, plugin files, mise config).
 - `merged`: for each `MERGE` target, the leaf JSON key paths boff injected. `leaf_paths` mirrors
@@ -429,6 +482,8 @@ returns `[]` when every hook is scoped to opencode; the shared `_settings` retur
 empty settings block. Nothing is wrong in either case. A deliberate drop must therefore be
 *declared*, not inferred: `@renders(SlashCommand, drops=True)` marks a renderer whose only job is to
 warn. `supports()` still returns True, so deploy behaves exactly as before; `check` reads the flag.
+A drop can also be scope-specific — `drops={ScopeKind.GLOBAL}` — since a surface may exist at one
+level and not the other (see [Scope](#scope-workspace-and-user-level)).
 
 **`Support` is four-valued, not two.** `Rule` and `Rules` are two shapes of the same manifest
 section: Claude and OpenCode read a rules directory, Antigravity reads a single instructions file,
@@ -745,7 +800,7 @@ that structurally cannot express an artifact is expected rather than newsworthy.
 
 | What to add | Files to create | Registration |
 |---|---|---|
-| New platform | `src/boff/adapters/<name>.py` + a `PlatformLayout` in `src/boff/platform_layout.py` | One line in `src/boff/adapters/__init__.py` |
+| New platform | `src/boff/adapters/<name>.py` + a `PlatformLayout` in `src/boff/platform_layout.py` (with a `global_factory`, or None if the platform has no user-level config) | One line in `src/boff/adapters/__init__.py` |
 | New context provider | `src/boff/context/<name>.py` | One line in `src/boff/context/__init__.py` |
 | New plugin source | `src/boff/sources/<name>.py` | One line in `src/boff/sources/__init__.py` |
 | New manifest source | `src/boff/manifest_sources/<name>.py` | One line in `src/boff/manifest_sources/__init__.py` (`_SOURCES`, before the local catch-all) |
@@ -760,7 +815,8 @@ A new platform owes `boff check` three things beyond its adapter:
 
 - **`PlatformLayout.binary`**: the CLI's executable name on `PATH`. It is not derivable from
   `name` (Antigravity's is `agy`), and `check` probes it before verifying.
-- **`@renders(<Type>, drops=True)`** on any renderer that exists only to warn, so `check` can tell
+- **`@renders(<Type>, drops=True)`**, or `drops={ScopeKind.GLOBAL}` for a scope-specific drop,
+  on any renderer that exists only to warn, so `check` can tell
   a deliberate drop apart from a renderer that had nothing to emit.
 - **`EQUIVALENT_SHAPES`** in `artifacts/__init__.py`, if the platform reads an existing artifact
   section through a different shape. Rendering more than one member of a group deploys the same

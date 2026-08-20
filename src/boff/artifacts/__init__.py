@@ -16,7 +16,14 @@ from boff.artifacts.output_style import OutputStyle
 from boff.artifacts.permissions import Action, PermissionRule, Permissions
 from boff.artifacts.rule import Rule, Rules
 from boff.artifacts.settings import RESERVED_KEYS, Settings
-from boff.artifacts.skill import SKILL_FILENAME, Skill, SkillFile, ships
+from boff.artifacts.skill import (
+    REQUIRED_FRONTMATTER,
+    SKILL_FILENAME,
+    Skill,
+    SkillFile,
+    parse_frontmatter,
+    ships,
+)
 from boff.artifacts.slash_command import SlashCommand
 
 type Artifact = (
@@ -48,6 +55,7 @@ __all__ = [
     "EVENT_MAP",
     "NORMALIZED_EVENTS",
     "RESERVED_KEYS",
+    "REQUIRED_FRONTMATTER",
     "SKILL_FILENAME",
     "Action",
     "Agent",
@@ -66,6 +74,7 @@ __all__ = [
     "Skill",
     "SkillFile",
     "SlashCommand",
+    "parse_frontmatter",
     "ships",
     "OutputStyle",
 ]

@@ -352,6 +352,25 @@ skills/
 | OpenCode | `.opencode/skills/<name>/SKILL.md` |
 | Antigravity CLI | `.agents/skills/<name>/SKILL.md` |
 
+**Every skill needs `name` and `description` frontmatter**, in either form. That is how each
+platform discovers the skill, and `description` is what the model reads to decide whether to
+activate it:
+
+```markdown
+---
+name: cmon-monitor
+description: Use when the user asks to add or change a production monitor.
+---
+
+# CMON monitor
+```
+
+Bun Off ships the body verbatim and rejects a skill that declares neither key, or a blank
+`description`, when it loads the manifest. This is an error rather than a warning because such
+a skill is not degraded but inert: every platform skips the file without complaint, so a deploy
+would otherwise report success over a skill that never loads. If the frontmatter `name`
+disagrees with the name in `boff.yaml`, Bun Off warns and deploys under the manifest's name.
+
 Both forms are listed the same way, by name:
 
 ```yaml
@@ -519,8 +538,9 @@ Tool names are canonical, not platform-native. Bun Off accepts these fifteen:
 | OpenCode | `opencode.json` | `permission`, keyed by tool |
 | Antigravity CLI | not supported: warns and skips |  |
 
-Antigravity keeps its permission allowlist in the machine-global
-`~/.gemini/antigravity-cli/settings.json`, which a workspace-scoped deploy must not write.
+Antigravity is dropped in **both** scopes. It does keep user-level permissions, as an
+allow/deny/ask triple, but the JSON key they live under is not established, and Bun Off will not
+write a guess that the tool would silently ignore while `boff check` reported success.
 
 **Not every tool exists on every platform, and a rule naming a tool the target cannot express is
 an error, not a warning.** Scope such rules with `available_on:`. Claude rejects `lsp`, `skill`,
@@ -562,11 +582,12 @@ settings:
 |---|---|---|
 | Claude Code | `.claude/settings.json` | Deep-merged at the top level |
 | OpenCode | `opencode.json` | Deep-merged at the top level |
-| Antigravity CLI | not supported: warns and skips |  |
+| Antigravity CLI | `~/.gemini/antigravity-cli/settings.json` (user level only) | Deep-merged at the top level |
 
-Antigravity CLI keeps its settings, including its permission allowlist, in the machine-global
-`~/.gemini/antigravity-cli/settings.json`. It has no workspace settings file, and a
-workspace-scoped deploy must not write a global one: two projects would clobber each other.
+Antigravity CLI has no workspace settings file at all: its settings live only in
+`~/.gemini/antigravity-cli/settings.json`. A workspace deploy therefore warns and skips, because
+writing that file on behalf of one project would affect every other. A
+[`--global` deploy](#-scopes) does write it.
 
 A settings block is a raw passthrough: Bun Off does not validate the values. To keep the modeled concepts
 canonical, Bun Off rejects keys that a dedicated artifact already owns: `permissions` and
@@ -928,20 +949,97 @@ rules:
 
 ## 🖥️ Supported platforms
 
-| Platform | Name flag | CLI binary | Notes |
-|---|---|---|---|
-| Claude Code | `claude` | `claude` | Writes to `.claude/` in the workspace root |
-| OpenCode | `opencode` | `opencode` | Writes to `.opencode/` and merges `opencode.json` |
-| Antigravity CLI | `antigravity` | `agy` | Writes to `.agents/` and generates `GEMINI.md` |
+| Platform | Name flag | CLI binary | Workspace target | User-level target (`--global`) |
+|---|---|---|---|---|
+| Claude Code | `claude` | `claude` | `.claude/` plus `.mcp.json` | `~/.claude/` |
+| OpenCode | `opencode` | `opencode` | `.opencode/` plus `opencode.json` | `~/.config/opencode/` |
+| Antigravity CLI | `antigravity` | `agy` | `.agents/` plus a generated `GEMINI.md` | `~/.gemini/config/` plus `~/.gemini/antigravity-cli/settings.json` |
 
 The **CLI binary** column is what [`boff check`](#boff-check) looks for on `PATH` before it
 verifies a platform. Pass `--no-probe` to skip that gate.
 
-Antigravity CLI supports a subset of the manifest. It has no workspace target for slash
-commands, output styles, settings, or permissions, and no session lifecycle events; Bun Off warns and skips each
-of those rather than writing a file the tool would silently ignore. `boff check` reports those
-artifacts as `dropped` and still exits `0`: the platform is doing what it declared. See
+Antigravity CLI supports a subset of the manifest. It has no target for slash commands or
+permissions in either scope, no session lifecycle events, and no workspace target for output
+styles or settings; Bun Off warns and skips each of those rather than writing a file the tool
+would silently ignore. `boff check` reports those artifacts as `dropped` and still exits `0`:
+the platform is doing what it declared. Which artifacts are dropped depends on the scope, and
+the table in [Scopes](#-scopes) gives the full picture. See
 [Known limitations](#-known-limitations).
+
+
+## 🌐 Scopes
+
+Every deploy targets one of two scopes.
+
+- **Workspace** (the default): the current directory. Config lands in `.claude/`, `.opencode/`,
+  `.agents/` and is normally committed with the project.
+- **User level** (`--global`): your own configuration, shared by every project on the machine.
+
+"Global" here means *your user account*, not the machine: Bun Off never writes outside your home
+directory. The name matches what the tools themselves call it — OpenCode ships
+`opencode plugin --global`, and Antigravity's docs call `~/.gemini/config/` its global
+configuration.
+
+The two scopes are **complementary and fully independent**. Each records its own state
+(`~/.boff/state.json` for user level, `<project>/.boff/state.json` for a workspace) and its own
+manifest stack, so cleaning one never touches the other. Deploy a personal stack once, then keep
+deploying project stacks on top:
+
+```bash
+boff deploy ~/stacks/personal --platform claude --global   # once per machine
+cd ~/projects/my-app
+boff deploy ./project-stack --platform claude              # once per project
+```
+
+Within a scope a deploy stays authoritative as usual: re-deploying a different manifest removes
+what the previous one installed (see [Deploy state & switching stacks](#-deploy-state--switching-stacks)).
+
+### What each platform accepts at user level
+
+A surface can exist in one scope and not the other, in *both* directions. Antigravity's settings
+have only a user-level home; Claude's MCP config has only a workspace one.
+
+| Manifest section | `claude` | `opencode` | `antigravity` |
+|---|---|---|---|
+| `rules:` | `~/.claude/rules/` | `~/.config/opencode/rules/` (flat) | `~/.gemini/config/rules/boff.md` |
+| `skills:` | `~/.claude/skills/` | `~/.config/opencode/skills/` | `~/.gemini/config/skills/` |
+| `agents:` | `~/.claude/agents/` | `~/.config/opencode/agents/` | `~/.gemini/config/agents/` |
+| `slash_commands:` | `~/.claude/commands/` | `~/.config/opencode/commands/` | dropped |
+| `output_styles:` | `~/.claude/output-styles/` | dropped | dropped |
+| `settings:` | `~/.claude/settings.json` | `~/.config/opencode/opencode.json` | `~/.gemini/antigravity-cli/settings.json` |
+| `permissions:` | `~/.claude/settings.json` | `~/.config/opencode/opencode.json` | dropped |
+| `mcp_servers:` | **dropped** | `~/.config/opencode/opencode.json` | `~/.gemini/config/mcp_config.json` |
+| `event_hooks:` | `~/.claude/hooks/` | `~/.config/opencode/hooks/` | `~/.gemini/config/hooks/` |
+| `plugins:` (`source: local`) | dropped | dropped | dropped |
+| `mise:` | `$XDG_CONFIG_HOME/mise/conf.d/` | — | — |
+
+Three of those deserve an explanation.
+
+**Claude MCP servers are dropped at user level.** Claude's user-scope MCP config lives in
+`~/.claude.json`, which also holds your OAuth credentials and per-project history and is
+rewritten by every Claude Code session. Bun Off merges by reading, modifying, and writing the
+whole file, so a deploy racing a live session could clobber it. Add user-scope servers with
+`claude mcp add --scope user` instead; project-scoped `mcp_servers:` are unaffected.
+
+**OpenCode's user-level rules directory is flat.** OpenCode resolves a *relative* `instructions`
+glob against the project you happen to be in, never against the config directory, so Bun Off
+registers an absolute entry (`~/.config/opencode/rules/*.md`) — and OpenCode globs only the last
+segment of an absolute path. A rule with a `category:` still deploys, with a warning, directly
+into `~/.config/opencode/rules/`. Rule names are unique within a manifest, so nothing collides.
+Bun Off deliberately does **not** write `~/.config/opencode/AGENTS.md`: OpenCode loads exactly one
+user-level instructions file, preferring that one over `~/.claude/CLAUDE.md`, so merely creating
+it would stop OpenCode reading your Claude instructions.
+
+**Antigravity reads user-level rules but not workspace ones.** `.agents/rules/*.md` is never
+loaded, which is why a workspace deploy inlines every rule into `GEMINI.md`. Its user-level
+`~/.gemini/config/rules/` *is* loaded, provided each file declares `trigger: always_on`
+frontmatter — a file without it is silently ignored. Bun Off writes one aggregate
+`rules/boff.md` carrying that frontmatter.
+
+`--global` cannot be combined with `--wipe`. A wipe deletes a platform's entire configuration
+directory, and at user level that is `~/.claude`, which also holds credentials and session
+history Bun Off never created. Use `boff clean --global`, which removes only Bun Off's own
+recorded footprint.
 
 
 ## ♻️ Deploy state & switching stacks
@@ -1109,7 +1207,7 @@ before installing:
 
 ## 🚀 Commands
 
-### Global flags
+### Top-level flags
 
 These precede the subcommand:
 
@@ -1125,7 +1223,7 @@ Deploy one or more manifests to one or more platforms.
 
 ```
 boff deploy [<manifest> ...] [--add <manifest>] [--remove <manifest>]
-            [--platform <name> ...] [--dry-run] [--clean | --wipe] [--no-ignore]
+            [--platform <name> ...] [--global] [--dry-run] [--clean | --wipe] [--no-ignore]
 ```
 
 | Argument | Description |
@@ -1138,6 +1236,7 @@ boff deploy [<manifest> ...] [--add <manifest>] [--remove <manifest>]
 | `--clean` | Remove Bun Off's entire recorded footprint for this project before installing (non-destructive: keeps files Bun Off never wrote). See [Deploy state & switching stacks](#-deploy-state--switching-stacks) |
 | `--wipe` | Delete all the targeted platforms' native configuration files before installing (destructive: removes hand-authored files too). Prompts for interactive confirmation |
 | `--no-ignore` | Do not add the deployed artifacts to the workspace `.gitignore` |
+| `--global` | Deploy to your user-level configuration instead of the current workspace. See [Scopes](#-scopes). Cannot be combined with `--wipe` |
 
 **Example:**
 
@@ -1153,6 +1252,9 @@ boff deploy --remove ../team-stack                    # and drop one again
 
 # Deploy a published bundle straight from GitHub, no clone of your own:
 boff deploy https://github.com/atom-sw/bun-off-bundles/tree/main/python --platform claude
+
+# Install a personal stack once, for every project on this machine:
+boff deploy ~/stacks/personal --platform claude --global
 ```
 
 The manifest arguments say *what* to deploy; the workspace is always the current directory. A
@@ -1170,15 +1272,16 @@ the deploy, compares the plan against what is actually on disk, and reports each
 never writes anything: not the artifacts, not `.boff/state.json`, not `.gitignore`.
 
 ```
-boff check [<manifest> ...] [--platform <name> ...] [--no-probe]
+boff check [<manifest> ...] [--platform <name> ...] [--global] [--no-probe]
 ```
 
 | Argument | Description |
 |---|---|
 | `manifest` | Path or Git URL of a manifest directory (must contain `boff.yaml`). See [Reference scheme](#reference-scheme). Repeatable, merging left to right. Omit to check the [recorded stack](#-deploying-a-stack-of-manifests) |
 | `--platform NAME` | Target platform, repeatable. Defaults to the platforms already deployed in this directory |
+| `--global` | Check your user-level configuration instead of the current workspace. See [Scopes](#-scopes) |
 | `--no-probe` | Skip checking that each platform's CLI binary is on `PATH`. Use this in CI and containers, where the assistants themselves are not installed |
-| `-v` | Also list every artifact that verified `ok` (a global flag: it goes *before* the subcommand) |
+| `-v` | Also list every artifact that verified `ok` (a top-level flag: it goes *before* the subcommand) |
 
 Each artifact reports one status:
 
@@ -1188,7 +1291,7 @@ Each artifact reports one status:
 | `missing` | Bun Off would write this file, and it is not there | `1` |
 | `drifted` | The file exists but its content, or a key Bun Off owns in it, differs | `1` |
 | `stale` | Something a previous deploy left behind that this manifest no longer produces. Re-deploying removes it | `1` |
-| `dropped` | The platform has no workspace target for this artifact and said so (see [Supported platforms](#-supported-platforms)) | `0` |
+| `dropped` | The platform has no target for this artifact *in this scope* and said so (see [Supported platforms](#-supported-platforms)) | `0` |
 | `unsupported` | The platform does not support this artifact type at all | `0` |
 | `unverifiable` | The operation runs a command rather than writing a file, so its effect cannot be verified | `0` |
 
@@ -1232,13 +1335,14 @@ Remove Bun Off's deployed footprint from a project without installing anything. 
 standalone form of the `deploy --clean` / `--wipe` flags.
 
 ```
-boff clean [--platform <name> ...] [--root <dir>] [--wipe] [--dry-run] [--no-ignore]
+boff clean [--platform <name> ...] [--root <dir> | --global] [--wipe] [--dry-run] [--no-ignore]
 ```
 
 | Flag | Description |
 |---|---|
 | `--platform NAME` | Restrict to these owners, repeatable. Omit to clean every platform Bun Off recorded. Required with `--wipe` |
-| `--root DIR` | Project root (default: current directory) |
+| `--root DIR` | Project root (default: current directory). Cannot be combined with `--global` |
+| `--global` | Clean your user-level configuration instead of a project. See [Scopes](#-scopes). Cannot be combined with `--wipe` |
 | `--wipe` | Delete all the targeted platforms' native configuration files (destructive), instead of only Bun Off's recorded files. Prompts for interactive confirmation |
 | `--dry-run` | Print planned operations without applying them |
 | `--no-ignore` | Do not update the workspace `.gitignore` |
@@ -1256,6 +1360,7 @@ later `boff deploy --add` starts from nothing rather than reinstalling what you 
 boff clean                                   # remove boff's whole footprint for this project
 boff clean --platform claude                 # remove only what boff deployed for Claude
 boff clean --wipe --platform claude          # delete .claude/ and .mcp.json wholesale (asks first)
+boff clean --global                          # remove boff's user-level footprint
 ```
 
 
@@ -1389,19 +1494,37 @@ Every command returns one of three exit codes, so you can script against them:
   separate file is not yet supported.
 
 - **Plugin sources:** Only `source: local` is implemented. Remote or registry-based plugin
-  sources are not yet available.
+  sources are not yet available, and `source: local` has no user-level target at all: it mirrors
+  a subtree to the deploy root, and there is no equivalent of that in a home directory. A
+  `--global` deploy warns and skips such a plugin rather than failing, so one manifest stays
+  deployable in both scopes.
 
-- **Scope:** Deploys are workspace-scoped. There is no global install mode, and no CLI flag
-  selects a scope.
+- **No user-level MCP servers for Claude Code.** Its only user-scope target, `~/.claude.json`,
+  holds credentials and is rewritten by every session. See [Scopes](#-scopes).
 
-- **Antigravity CLI supports a subset of the manifest.** It has no workspace target for
-  `slash_commands:`, `output_styles:`, `settings:`, or `permissions:` (its settings and
-  permission allowlist live in the machine-global
-  `~/.gemini/antigravity-cli/settings.json`), and no `session_start` or
-  `session_end` event. Bun Off warns and skips each. It also loads rules only from its primary
-  instructions file, so every rule is inlined into a generated `GEMINI.md` and `rules[].category`
-  and `rules[].globs` have no effect there. Per-agent `permissions:` raise an error, and a
-  subagent `model:` is ignored because Antigravity subagents inherit the parent's model.
+- **OpenCode's user-level rules are flat.** A `category:` cannot be honored there, because the
+  `instructions` glob Bun Off registers can only match one directory level. See
+  [Scopes](#-scopes).
+
+- **Bun Off owns the whole `instructions` array in `opencode.json`.** JSON merging replaces
+  lists rather than concatenating them, so hand-authored `instructions` entries in a file Bun
+  Off also writes are replaced. This applies in both scopes, but matters more at user level,
+  where you are likelier to have set your own.
+
+- **Antigravity CLI supports a subset of the manifest.** It has no target for
+  `slash_commands:` or `permissions:` in either scope, and no workspace target for
+  `output_styles:` or `settings:` (settings live only in the user-level
+  `~/.gemini/antigravity-cli/settings.json`, which `--global` does write). It has no
+  `session_start` or `session_end` event. Bun Off warns and skips each. In a workspace it loads
+  rules only from its primary instructions file, so every rule is inlined into a generated
+  `GEMINI.md` and `rules[].category` and `rules[].globs` have no effect there. Per-agent
+  `permissions:` raise an error, and a subagent `model:` is ignored because Antigravity
+  subagents inherit the parent's model.
+
+- **Antigravity `permissions:` are dropped in every scope.** It does hold user-level
+  permissions, as an allow/deny/ask triple, but the JSON key they live under is not established.
+  Bun Off will not guess: a wrong key would deploy settings the tool silently ignores while
+  `boff check` reported success. Scope them with `available_on: [claude, opencode]`.
 
 - **Output styles are Claude Code only, by design.** OpenCode's nearest analogue is a primary
   agent, but its prompt *replaces* the base system prompt rather than appending to it, so

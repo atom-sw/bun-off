@@ -366,3 +366,15 @@ def test_gitignore_skips_unreadable_merge_target(
     lines = _managed_block_lines(repo / ".gitignore")
     assert f"/{target}" not in lines
     assert f"#/{target}" not in lines
+
+
+def test_global_scope_writes_no_gitignore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The user's home is not a deploy root, and it is commonly a dotfiles repo: boff must not
+    # append a managed block to a `.gitignore` there.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".git").mkdir()
+    state = DeployState(scopes={"global": {"claude": OwnerRecord(files=[".claude/rules/x.md"])}})
+
+    update_workspace_gitignore(state, Scope(kind=ScopeKind.GLOBAL))
+
+    assert not (tmp_path / ".gitignore").exists()

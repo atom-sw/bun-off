@@ -162,7 +162,7 @@ class OpenCodeContextProvider(ContextProvider):
                 has_rules = True
             ops.append(self._instruction_op(doc, root))
         if has_rules:
-            ops.append(opencode_instructions_glob_op(root))
+            ops.append(opencode_instructions_glob_op(self.layout.paths(scope)))
         for plan in bundle.plans:
             ops.append(
                 FileOperation(

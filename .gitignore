@@ -238,6 +238,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # BEGIN boff-managed
+/.agents/skills/doc-check/SKILL.md
+/.agents/skills/python-packaging/SKILL.md
 /.claude/hooks/_boff_dispatch.py
 /.claude/hooks/mise-install
 /.claude/hooks/ruff-format
@@ -265,4 +267,32 @@ __marimo__/
 /.config/mise/conf.d/boff-1.toml
 /.config/mise/conf.d/boff-2.toml
 /.mcp.json
+/.opencode/commands/python-packaging.md
+/.opencode/hooks/mise-install
+/.opencode/plugins/boff-hooks.js
+/.opencode/plugins/rtk.js
+/.opencode/rules/commit-conventions.md
+/.opencode/rules/context-management.md
+/.opencode/rules/documentation-style.md
+/.opencode/rules/explore-then-code.md
+/.opencode/rules/lint-exceptions.md
+/.opencode/rules/match-project-conventions.md
+/.opencode/rules/precise-context.md
+/.opencode/rules/python-dev/docstrings.md
+/.opencode/rules/python-dev/python-style.md
+/.opencode/rules/python-dev/python-testing.md
+/.opencode/rules/python-dev/python-toolchain.md
+/.opencode/rules/python-dev/python-typing.md
+/.opencode/rules/security-basics.md
+/.opencode/rules/vcs-etiquette.md
+/.opencode/rules/verify-your-work.md
+/.opencode/rules/writing-docs.md
+/.opencode/rules/writing-tests.md
+/.opencode/skills/doc-check/SKILL.md
+/.opencode/skills/python-packaging/SKILL.md
+/GEMINI.md
+#
+# These files also contain settings you edited, so boff leaves them tracked.
+# Uncomment a line to ignore the whole file (including your own keys):
+#/opencode.json
 # END boff-managed

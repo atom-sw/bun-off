@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar
 
-from boff.adapters.base import PlatformAdapter, frontmatter_block, renders
+from boff.adapters.base import (
+    PlatformAdapter,
+    frontmatter_block,
+    renders,
+    require_rules_dir,
+)
 from boff.artifacts import (
     Agent,
     EventHook,
     EventHooks,
+    MCPServer,
     OutputStyle,
     PermissionRule,
     Permissions,
     Rule,
 )
 from boff.jsonutil import dumps_json
-from boff.platform_layout import CLAUDE_LAYOUT, PlatformLayout, require_workspace_root
-from boff.types import FileOperation, MergeStrategy, Operation, Scope
+from boff.platform_layout import CLAUDE_LAYOUT, PlatformLayout
+from boff.types import FileOperation, MergeStrategy, Operation, Scope, ScopeKind
+
+_log = logging.getLogger(__name__)
 
 _CLAUDE_TOOL = {
     "bash": "Bash",
@@ -135,12 +144,9 @@ class ClaudeAdapter(PlatformAdapter):
     def _rule(self, artifact: Rule, *, platform: str, scope: Scope) -> list[Operation]:
         """Write a rule to ``.claude/rules/[<category>/]<name>.md``, prepending any globs."""
         del platform
-        root = require_workspace_root(scope)
-        parts = [self.layout.config_root, "rules"]
-        if artifact.category:
-            parts.append(artifact.category)
-        parts.append(f"{artifact.name}.md")
-        target = root.joinpath(*parts)
+        rules_dir = require_rules_dir(self.layout.paths(scope), self.name)
+        subdir = rules_dir / artifact.category if artifact.category else rules_dir
+        target = subdir / f"{artifact.name}.md"
         content = artifact.content
         if artifact.globs:
             content = _globs_frontmatter(artifact.globs) + content
@@ -153,6 +159,24 @@ class ClaudeAdapter(PlatformAdapter):
             )
         ]
 
+    @renders(MCPServer, drops={ScopeKind.GLOBAL})
+    def _mcp_server(self, artifact: MCPServer, *, platform: str, scope: Scope) -> list[Operation]:
+        """Merge into ``.mcp.json``, or warn and skip at user level.
+
+        Claude's user-scope MCP servers live in ``~/.claude.json``, which also holds OAuth
+        credentials and per-project history and is rewritten by every Claude Code session.
+        Merging is read-modify-write, so a deploy racing a live session would clobber it.
+        """
+        if scope.kind is ScopeKind.GLOBAL:
+            _log.warning(
+                "mcp server %r is not deployed to claude at user level: its only user-scope "
+                "target is ~/.claude.json, which holds credentials and is rewritten by every "
+                "session; add it with `claude mcp add --scope user` instead",
+                artifact.name,
+            )
+            return []
+        return PlatformAdapter._mcp_server(self, artifact, platform=platform, scope=scope)
+
     @renders(OutputStyle)
     def _output_style(
         self, artifact: OutputStyle, *, platform: str, scope: Scope
@@ -164,8 +188,8 @@ class ClaudeAdapter(PlatformAdapter):
         ``outputStyle`` through the ``settings:`` block.
         """
         del platform
-        root = require_workspace_root(scope)
-        target = root / self.layout.config_root / "output-styles" / f"{artifact.name}.md"
+        config_root = self.layout.paths(scope).config_root
+        target = config_root / "output-styles" / f"{artifact.name}.md"
         return [
             FileOperation(
                 target=target,
@@ -181,14 +205,14 @@ class ClaudeAdapter(PlatformAdapter):
     ) -> list[Operation]:
         """Merge allow/ask/deny permission specs into ``.claude/settings.json``."""
         del platform
-        root = require_workspace_root(scope)
+        settings = self.layout.paths(scope).require_settings(self.name)
         buckets: dict[str, list[str]] = {"allow": [], "ask": [], "deny": []}
         for rule in artifact.rules_for("claude"):
             buckets[rule.action].append(_claude_spec(rule))
         payload = {"permissions": {k: v for k, v in buckets.items() if v}}
         return [
             FileOperation(
-                target=self.layout.settings_path(root),
+                target=settings,
                 content=dumps_json(payload),
                 merge=MergeStrategy.MERGE,
                 description="claude permissions",
@@ -202,19 +226,19 @@ class ClaudeAdapter(PlatformAdapter):
         hooks = artifact.hooks_for("claude")
         if not hooks:
             return []
-        root = require_workspace_root(scope)
+        paths = self.layout.paths(scope)
         ops: list[Operation] = [
             FileOperation(
-                target=root / self.layout.hooks_subdir / "_boff_dispatch.py",
+                target=paths.hooks_dir / "_boff_dispatch.py",
                 content=_DISPATCHER,
                 merge=MergeStrategy.OVERWRITE,
                 description="claude event-hook dispatcher",
             )
         ]
-        ops.extend(self._hook_script_ops(hooks, root))
+        ops.extend(self._hook_script_ops(hooks, paths.hooks_dir))
         ops.append(
             FileOperation(
-                target=self.layout.settings_path(root),
+                target=paths.require_settings(self.name),
                 content=dumps_json({"hooks": _claude_hooks_block(hooks)}),
                 merge=MergeStrategy.MERGE,
                 description="claude event hooks",
@@ -226,7 +250,7 @@ class ClaudeAdapter(PlatformAdapter):
     def _agent(self, artifact: Agent, *, platform: str, scope: Scope) -> list[Operation]:
         """Write a subagent to ``.claude/agents/<name>.md`` with frontmatter."""
         del platform
-        root = require_workspace_root(scope)
+        agents_dir = self.layout.paths(scope).agents_dir
         allow: list[str] = []
         deny: list[str] = []
         for rule in artifact.permissions_for("claude"):
@@ -260,7 +284,7 @@ class ClaudeAdapter(PlatformAdapter):
             frontmatter["disallowedTools"] = ", ".join(deny)
         return [
             FileOperation(
-                target=root / self.layout.config_root / "agents" / f"{artifact.name}.md",
+                target=agents_dir / f"{artifact.name}.md",
                 content=frontmatter_block(frontmatter) + artifact.content,
                 merge=MergeStrategy.OVERWRITE,
                 description=f"claude agent {artifact.name}",

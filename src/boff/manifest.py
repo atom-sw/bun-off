@@ -13,6 +13,7 @@ import yaml
 
 from boff.artifacts import (
     NORMALIZED_EVENTS,
+    REQUIRED_FRONTMATTER,
     RESERVED_KEYS,
     SKILL_FILENAME,
     Action,
@@ -30,6 +31,7 @@ from boff.artifacts import (
     Skill,
     SkillFile,
     SlashCommand,
+    parse_frontmatter,
     ships,
 )
 from boff.artifacts.permissions import CANONICAL_TOOLS
@@ -268,11 +270,47 @@ def _load_skills(root: Path, entries: list[Any]) -> tuple[Skill, ...]:
                 raise FileNotFoundError(f"skill directory has no entry point: {entry_path}")
             content, files = entry_path.read_text(), _load_skill_files(skill_root)
         elif md_path.is_file():
+            entry_path = md_path
             content, files = md_path.read_text(), ()
         else:
             raise FileNotFoundError(f"{SKILLS_DIR} content not found: {md_path}")
+        _validate_skill_frontmatter(name, content, entry_path)
         skills.append(Skill(name=name, content=content, available_on=available_on, files=files))
     return tuple(skills)
+
+
+def _validate_skill_frontmatter(name: str, content: str, path: Path) -> None:
+    """Reject a ``SKILL.md`` no platform would load, and warn if it renames itself.
+
+    Every supported platform discovers a skill through its frontmatter, and skips a file
+    that declares none. Without this check such a skill deploys, verifies ``ok``, and never
+    loads: a silent no-op is the one outcome the author cannot debug from the outside.
+    """
+    block = parse_frontmatter(content)
+    if block is None:
+        raise ValueError(
+            f"skill '{name}' has no YAML frontmatter ({path}); every platform needs a "
+            f"'---' block declaring {' and '.join(REQUIRED_FRONTMATTER)}, and skips a file "
+            "without one"
+        )
+    missing = [key for key in REQUIRED_FRONTMATTER if not str(block.get(key) or "").strip()]
+    if missing:
+        raise ValueError(
+            f"skill '{name}' frontmatter is missing {', '.join(missing)} ({path}); "
+            "a skill without them is never loaded. 'description' is what the model reads to "
+            "decide whether to activate the skill, so it cannot be blank"
+        )
+    declared = str(block["name"]).strip()
+    if declared != name:
+        # boff names the deployed directory from the manifest, so the two disagree on disk.
+        _log.warning(
+            "skill %r declares name %r in its frontmatter (%s); boff deploys it as %r, "
+            "the name the manifest lists",
+            name,
+            declared,
+            path,
+            name,
+        )
 
 
 class _SimpleArtifactFactory[T](Protocol):
