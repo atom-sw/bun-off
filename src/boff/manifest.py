@@ -286,7 +286,10 @@ def _validate_skill_frontmatter(name: str, content: str, path: Path) -> None:
     that declares none. Without this check such a skill deploys, verifies ``ok``, and never
     loads: a silent no-op is the one outcome the author cannot debug from the outside.
     """
-    block = parse_frontmatter(content)
+    try:
+        block = parse_frontmatter(content)
+    except ValueError as exc:
+        raise ValueError(f"skill '{name}' has malformed frontmatter ({path}): {exc}") from exc
     if block is None:
         raise ValueError(
             f"skill '{name}' has no YAML frontmatter ({path}); every platform needs a "

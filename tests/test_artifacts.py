@@ -144,6 +144,11 @@ def test_agent_permissions_for_filters_by_platform() -> None:
     assert len(agent.permissions_for("opencode")) == 2
 
 
+def test_parse_frontmatter_rejects_invalid_yaml() -> None:
+    with pytest.raises(ValueError, match="not valid YAML"):
+        parse_frontmatter("---\ndescription: a bundle: a folder\n---\nbody")
+
+
 @pytest.mark.parametrize(
     ("content", "expected"),
     [

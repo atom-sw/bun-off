@@ -41,13 +41,22 @@ def parse_frontmatter(content: str) -> dict[str, Any] | None:
     A frontmatter block opens on the very first line with ``---`` and closes on the next line
     that is exactly ``---``. Returns an empty mapping for a block that is empty or does not
     parse to a mapping, which callers treat the same as missing keys.
+
+    Raises :class:`ValueError` when the block is not valid YAML. That is a real authoring
+    mistake rather than an absent block -- an unquoted ``description`` containing ``": "`` is
+    the common one -- and the platforms skip such a skill as silently as one with no
+    frontmatter at all.
     """
     lines = content.splitlines()
     if not lines or lines[0].strip() != "---":
         return None
     for index in range(1, len(lines)):
         if lines[index].strip() == "---":
-            return as_json_object(yaml.safe_load("\n".join(lines[1:index]))) or {}
+            try:
+                block = yaml.safe_load("\n".join(lines[1:index]))
+            except yaml.YAMLError as exc:
+                raise ValueError(f"frontmatter is not valid YAML: {exc}") from exc
+            return as_json_object(block) or {}
     # An opening fence with no closing one is not a frontmatter block.
     return None
 

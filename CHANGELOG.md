@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-20
+
+### Fixed
+
+- A `SKILL.md` whose frontmatter is not valid YAML no longer aborts the command with a stack
+  trace from the YAML parser. 0.5.0 began parsing skill frontmatter and did not handle a block
+  that fails to parse, so an unquoted `description` containing `": "` turned `boff deploy`
+  and `boff check` into a traceback naming library internals rather than the file at fault.
+  Bun Off now reports the skill and the path, and treats the block the same as one missing a
+  required key.
+
 ## [0.5.0] - 2026-08-20
 
 ### Added
@@ -169,7 +180,8 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/atom-sw/bun-off/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/atom-sw/bun-off/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/atom-sw/bun-off/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/atom-sw/bun-off/compare/v0.3.0...v0.3.1

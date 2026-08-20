@@ -163,6 +163,22 @@ def test_skill_without_loadable_frontmatter_raises(
         load_manifest(tmp_path)
 
 
+def test_skill_with_unparseable_frontmatter_names_the_file(
+    tmp_path: Path, write_manifest: WriteManifest
+) -> None:
+    """Malformed YAML is an authoring mistake, not a missing block, and must not traceback.
+
+    An unquoted ``description`` holding ``": "`` is the common way to write one by accident.
+    """
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "skills" / "s.md").write_text(
+        "---\nname: s\ndescription: Author a bundle: a manifest folder.\n---\n\n# body\n"
+    )
+    write_manifest(tmp_path, "skills:\n  - s\n")
+    with pytest.raises(ValueError, match="malformed frontmatter"):
+        load_manifest(tmp_path)
+
+
 def test_directory_skill_frontmatter_is_validated_too(
     tmp_path: Path, write_manifest: WriteManifest, write_skill_dir: WriteSkillDir
 ) -> None:
