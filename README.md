@@ -236,8 +236,8 @@ URL ends in three steps, taking the first that applies:
 3. Otherwise the first two segments are `<owner>/<repo>`, the convention every forge follows.
 
 The `/<subdir>` and the trailing `@<ref>` are both optional, and `@<ref>` defaults to the remote's
-default branch. Spell a branch name containing a slash with `@<ref>`: a browser URL cannot express
-one, and an explicit `@<ref>` overrides the ref a `tree` segment names.
+default branch. Spell a ref containing a slash (e.g., `writing/0.1.0`) with `@<ref>`. A ref containing
+an `@` is not supported at all: Bun Off splits the reference on its first `@`.
 
 Bun Off fetches into a cache under `$XDG_CACHE_HOME/boff/git/` (or `~/.cache/boff/git/`) and
 reuses it on later runs. Every spelling of one repository shares a single clone.
@@ -321,16 +321,12 @@ Platform support differs:
 
 | Platform | Behavior |
 |---|---|
-| Claude Code | Bun Off prepends a `globs:` frontmatter block to the rule file (the key Claude Code honors: the documented `paths:` key is silently broken). The rule loads only when matching files are in play. |
-| OpenCode | OpenCode has no conditional, path-scoped loading: its `instructions` globs only select which files to always load. Bun Off deploys the rule unscoped (as it does today) and logs a warning that the scope is not enforced. |
+| Claude Code | Bun Off prepends a `paths:` frontmatter block (a YAML list) to the rule file, which defines path-scoped rules in Claude Code. Thus, the rule loads only when matching files are in play. |
+| OpenCode | OpenCode has no conditional, path-scoped loading: its `instructions` globs only select which files to always load. Bun Off deploys the rule unscoped and logs a warning that the scope is not enforced. |
 | Antigravity CLI | Rules are inlined into `GEMINI.md`, which loads wholesale. Bun Off deploys the rule unscoped and logs a warning that the scope is not enforced. |
 
-Two caveats:
-
-- Claude Code honors `globs:` only for workspace-level rules (`.claude/rules/`), not user-level
-  rules. Indeed, Bun Off deploys to the workspace.
-- `globs:` patterns are written verbatim into a double-quoted YAML string, so a pattern must not
-  contain a double-quote character.
+Bun Off deploys Claude rules only to the workspace (`.claude/rules/`), never to user-level rules,
+so scoping only needs to hold there.
 
 ### Skills
 
