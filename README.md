@@ -327,16 +327,12 @@ Platform support differs:
 
 | Platform | Behavior |
 |---|---|
-| Claude Code | Bun Off prepends a `globs:` frontmatter block to the rule file (the key Claude Code honors: the documented `paths:` key is silently broken). The rule loads only when matching files are in play. |
-| OpenCode | OpenCode has no conditional, path-scoped loading: its `instructions` globs only select which files to always load. Bun Off deploys the rule unscoped (as it does today) and logs a warning that the scope is not enforced. |
+| Claude Code | Bun Off prepends a `paths:` frontmatter block (a YAML list) to the rule file, which defines path-scoped rules in Claude Code. Thus, the rule loads only when matching files are in play. |
+| OpenCode | OpenCode has no conditional, path-scoped loading: its `instructions` globs only select which files to always load. Bun Off deploys the rule unscoped and logs a warning that the scope is not enforced. |
 | Antigravity CLI | Rules are inlined into `GEMINI.md`, which loads wholesale. Bun Off deploys the rule unscoped and logs a warning that the scope is not enforced. |
 
-Two caveats:
-
-- Claude Code honors `globs:` only for workspace-level rules (`.claude/rules/`), not user-level
-  rules. Indeed, Bun Off deploys to the workspace.
-- `globs:` patterns are written verbatim into a double-quoted YAML string, so a pattern must not
-  contain a double-quote character.
+Bun Off deploys Claude rules only to the workspace (`.claude/rules/`), never to user-level rules,
+so scoping only needs to hold there.
 
 ### Skills
 

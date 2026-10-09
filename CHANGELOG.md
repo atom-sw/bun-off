@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-09
+
+### Fixed
+
+- Restore the 0.5.2 fix that 0.6.0 accidentally dropped: `rules[].globs:` scoping on Claude
+  Code renders a `paths:` frontmatter block again. 0.6.0 was built without it and went back to
+  `globs:` frontmatter, which Claude Code ignores, so every scoped rule loaded on every file.
+  Upgrade from 0.6.0 and deploy again to rewrite the affected rule files; no manifest changes
+  are needed.
+
 ## [0.6.0] - 2026-10-09
 
 ### Added
@@ -26,6 +36,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `--dry-run` lists each planned operation. Before, it printed only the count unless
   `--verbose` was also given. The header now pluralizes correctly: "planned 1 operation:" or
   "planned N operations:".
+
+## [0.5.2] - 2026-08-23
+
+### Fixed
+
+- `rules[].globs:` scoping on Claude Code now renders a `paths:` frontmatter block instead of
+  `globs:`. Previously, `globs:` was used to this end, possibly because older versions of Claude
+  Code lacked a precise documentation. Live testing against claude 2.1.241 found that `globs:`
+  frontmatter loads a rule unconditionally on every file, while `paths:` (the currently documented key)
+  loads it only when a matching file is read. No manifest changes are needed.
 
 ## [0.5.1] - 2026-08-20
 
@@ -200,8 +220,10 @@ Initial public release.
   previous one instead of accumulating drift.
 - PEP 561 `py.typed` marker: the package ships its inline type annotations.
 
-[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/atom-sw/bun-off/compare/v0.5.1...v0.6.0
+[Unreleased]: https://github.com/atom-sw/bun-off/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/atom-sw/bun-off/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/atom-sw/bun-off/compare/v0.5.2...v0.6.0
+[0.5.2]: https://github.com/atom-sw/bun-off/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/atom-sw/bun-off/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/atom-sw/bun-off/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/atom-sw/bun-off/compare/v0.3.1...v0.4.0
