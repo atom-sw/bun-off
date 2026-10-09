@@ -1,15 +1,27 @@
 import logging
 from collections.abc import Callable
 from pathlib import Path
+from string import Template
 
 import pytest
 
-from boff.manifest import load_manifest
-from tests.conftest import SKILL_BODY, SKILL_SUPPORT
+from boff.adapters import adapter_names, get_adapter
+from boff.errors import ManifestError
+from boff.manifest import Manifest, load_manifest
+from boff.manifest_sources import git as git_source
+from boff.types import Operation, Scope
+from tests.conftest import (
+    REMOTE_RULE_V1,
+    REMOTE_RULE_V2,
+    SKILL_BODY,
+    SKILL_SUPPORT,
+    file_op,
+)
 
 # Factory signatures for the `write_manifest` and `write_skill_dir` fixtures (see conftest.py).
 WriteManifest = Callable[..., Path]
 WriteSkillDir = Callable[..., Path]
+DeployOps = Callable[[Manifest, str, Scope], list[Operation]]
 
 
 def test_load_manifest_counts(sample_manifest: Path) -> None:
@@ -567,3 +579,110 @@ def test_extends_rejects_bad_type(tmp_path: Path) -> None:
     (tmp_path / "boff.yaml").write_text("meta:\n  name: t\n  description: d\nextends: 3\n")
     with pytest.raises(ValueError, match="extends"):
         load_manifest(tmp_path)
+
+
+@pytest.fixture
+def load_remote(
+    content_repo: Path, tmp_path: Path, write_manifest: WriteManifest
+) -> Callable[[str], Manifest]:
+    """Return a loader for a manifest ``body`` in which ``$repo`` names the `content_repo`."""
+
+    def _load(body: str) -> Manifest:
+        root = write_manifest(tmp_path / "m", Template(body).substitute(repo=content_repo))
+        return load_manifest(root)
+
+    return _load
+
+
+LoadRemote = Callable[[str], Manifest]
+SKILLS_V1 = "file://$repo/skills@v1"
+
+
+def test_remote_directory_skill_carries_its_supporting_files(load_remote: LoadRemote) -> None:
+    skill = load_remote(f"skills:\n  - {{name: s, from: '{SKILLS_V1}'}}\n").skills[0]
+    assert skill.content == SKILL_BODY
+    assert {str(f.path): f.content.decode() for f in skill.files} == SKILL_SUPPORT
+
+
+def test_remote_flat_skill_loads(load_remote: LoadRemote) -> None:
+    skill = load_remote(f"skills:\n  - {{name: flat, from: '{SKILLS_V1}'}}\n").skills[0]
+    assert (skill.name, skill.files) == ("flat", ())
+
+
+def _rule_from(ref: str) -> str:
+    """Return a manifest body listing the `content_repo` rule ``r`` at git ``ref``."""
+    return f"rules:\n  - {{name: r, from: 'file://$repo/rules@{ref}'}}\n"
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected"),
+    [("v1", REMOTE_RULE_V1), ("main", REMOTE_RULE_V2)],
+    ids=["tag", "branch"],
+)
+def test_remote_rule_loads_the_named_ref(ref: str, expected: str, load_remote: LoadRemote) -> None:
+    assert load_remote(_rule_from(ref)).rules[0].content == expected
+
+
+def test_two_refs_of_one_repository_each_load_their_own_content(load_remote: LoadRemote) -> None:
+    """A repeat reference skips the network fetch but still checks out its own ref."""
+    contents = [load_remote(_rule_from(ref)).rules[0].content for ref in ("v1", "main", "v1")]
+    assert contents == [REMOTE_RULE_V1, REMOTE_RULE_V2, REMOTE_RULE_V1]
+
+
+def test_entries_from_one_repository_fetch_it_once(
+    load_remote: LoadRemote, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    network: list[str] = []
+    real_git = git_source._git  # pyright: ignore[reportPrivateUsage]  (spied, not replaced)
+
+    def spy(*args: str, cwd: Path | None = None) -> str:
+        network.extend(a for a in args if a in {"clone", "fetch"})
+        return real_git(*args, cwd=cwd)
+
+    monkeypatch.setattr(git_source, "_git", spy)
+    load_remote(
+        f"skills:\n  - {{name: s, from: '{SKILLS_V1}'}}\n  - {{name: flat, from: '{SKILLS_V1}'}}\n"
+        + _rule_from("v1")
+    )
+    assert network == ["clone"]
+
+
+@pytest.mark.parametrize(
+    ("entry", "raises"),
+    [
+        pytest.param("{name: s, from: ../elsewhere}", (ValueError, "git URL"), id="local-path"),
+        pytest.param("{name: s, from: 42}", (ValueError, "git URL"), id="not-a-string"),
+        pytest.param(
+            f"{{name: absent, from: '{SKILLS_V1}'}}",
+            (FileNotFoundError, "absent"),
+            id="missing-name",
+        ),
+        pytest.param(
+            f"{{name: inert, from: '{SKILLS_V1}'}}",
+            (ValueError, "no YAML frontmatter"),
+            id="no-frontmatter",
+        ),
+        pytest.param(
+            "{name: s, from: 'file://$repo/skills@no-such-ref'}",
+            (ManifestError, "skill 's': git command failed"),
+            id="bad-ref",
+        ),
+    ],
+)
+def test_remote_skill_errors(
+    entry: str, raises: tuple[type[Exception], str], load_remote: LoadRemote
+) -> None:
+    error, match = raises
+    with pytest.raises(error, match=match):
+        load_remote(f"skills:\n  - {entry}\n")
+
+
+@pytest.mark.parametrize("platform", adapter_names())
+def test_remote_skill_deploys_to_every_platform(
+    platform: str, load_remote: LoadRemote, workspace_scope: Scope, deploy_ops: DeployOps
+) -> None:
+    manifest = load_remote(f"skills:\n  - {{name: s, from: '{SKILLS_V1}'}}\n")
+    skills_dir = get_adapter(platform).layout.paths(workspace_scope).skills_dir
+    assert skills_dir is not None
+    targets = {file_op(op).target for op in deploy_ops(manifest, platform, workspace_scope)}
+    assert targets == {skills_dir / "s" / rel for rel in ("SKILL.md", *SKILL_SUPPORT)}

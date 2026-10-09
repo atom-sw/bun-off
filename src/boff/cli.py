@@ -271,10 +271,14 @@ def _print_ops(ops: list[Operation], dest: TextIO, *, force_verbose: bool = Fals
     if not ops:
         console.info("no operations to perform", dest=dest)
         return
-    console.info(f"planned {len(ops)} operation(s):", dest=dest)
+    noun = "operation" if len(ops) == 1 else "operations"
+    console.info(f"planned {len(ops)} {noun}:", dest=dest)
     for op in ops:
-        if console.verbose or force_verbose:
-            console.debug(f"{type(op).__name__}: {op.description or '<no description>'}", dest=dest)
+        console.debug(
+            f"{type(op).__name__}: {op.description or '<no description>'}",
+            dest=dest,
+            force=force_verbose,
+        )
 
 
 def _print_meta(manifest: Manifest, dest: TextIO) -> None:

@@ -59,7 +59,7 @@ def test_render_rule_with_globs_prepends_frontmatter() -> None:
         platform="claude",
         scope=SCOPE,
     )
-    assert text_of(ops[0]) == "---\npaths:\n- '**/*.cs'\n- '**/Controllers/**'\n---\n\nbody"
+    assert text_of(ops[0]) == f'---\nglobs: "{", ".join(globs)}"\n---\n\nbody'
 
 
 def test_render_skill_is_folder_per_skill() -> None:

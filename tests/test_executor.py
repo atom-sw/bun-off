@@ -3,7 +3,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-import yaml
 
 from boff.executor import execute
 from boff.manifest import Manifest, load_manifest
@@ -21,9 +20,7 @@ DeployOps = Callable[[Manifest, str, Scope], list[Operation]]
 # The globs authored on the sample manifest's `style` rule, bound once so the rendered
 # frontmatter assertion below cannot drift from the fixture.
 _STYLE_GLOBS = ("**/*.md", "docs/**")
-_STYLE_FRONTMATTER = (
-    "---\n" + yaml.safe_dump({"paths": list(_STYLE_GLOBS)}, sort_keys=False).strip() + "\n---\n\n"
-)
+_STYLE_FRONTMATTER = f'---\nglobs: "{", ".join(_STYLE_GLOBS)}"\n---\n\n'
 
 
 def test_execute_writes_all_expected_files(

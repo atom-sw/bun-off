@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +36,7 @@ _OWNER_REPO = 2
 
 @dataclass(frozen=True)
 class GitRef:
-    """A parsed git manifest reference."""
+    """A parsed git reference: a manifest's ``extends`` or a skill or rule's ``from``."""
 
     repo_url: str
     subdir: str  # "" when the manifest sits at the repo root
@@ -59,7 +60,7 @@ def _split_authority(text: str) -> tuple[str, str]:
     """
     scheme, sep, rest = text.partition("://")
     if not sep:
-        raise ManifestError(f"git manifest reference must be a URL: {text!r}")
+        raise ManifestError(f"git reference must be a URL: {text!r}")
     authority, _, path = rest.partition("/")
     return f"{scheme}://{authority}", path
 
@@ -84,17 +85,17 @@ def _find_boundary(segments: list[str], ref: str, *, has_authority: bool) -> _Bo
     if has_authority and len(segments) >= _OWNER_REPO:
         return _Boundary(repo_len=_OWNER_REPO, subdir_start=_OWNER_REPO, ref=None)
     raise ManifestError(
-        f"cannot tell where the repository ends in git manifest reference {ref!r}: "
+        f"cannot tell where the repository ends in git reference {ref!r}: "
         "give the repository a '.git' suffix, or use a '/tree/<ref>/' URL"
     )
 
 
 def parse_git_ref(ref: str) -> GitRef:
-    """Split a git manifest reference into repository URL, subdirectory, and git ref."""
+    """Split a git reference into repository URL, subdirectory, and git ref."""
     base, path = _split_authority(ref.removeprefix("git+"))
     path, sep, ref_part = path.partition("@")
     if sep and not ref_part:
-        raise ManifestError(f"git manifest reference has an empty '@<ref>': {ref!r}")
+        raise ManifestError(f"git reference has an empty '@<ref>': {ref!r}")
 
     segments = [segment for segment in path.split("/") if segment]
     at = _find_boundary(segments, ref, has_authority=not base.endswith("//"))
@@ -122,13 +123,88 @@ def _cache_dir(repo_url: str) -> Path:
     return _cache_root() / digest
 
 
-def _git(*args: str, cwd: Path | None = None) -> None:
-    """Execute a git command."""
+def _git(*args: str, cwd: Path | None = None) -> str:
+    """Execute a git command and return its standard output."""
     try:
-        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+        done = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as exc:
         cmd = " ".join(["git", *args])
         raise ManifestError(f"git command failed ({cmd}):\n{exc.stderr}") from exc
+    return done.stdout
+
+
+_fetched: set[Path] = set()
+"""Clones fetched, and commit checkouts verified, by this process.
+
+A bundle listing nine skills from one repository resolves nine references to it, and each
+would otherwise cost a network round trip. A later boff run starts empty, so it fetches again
+and a branch reference picks up new upstream commits.
+"""
+
+
+def _commit_of(clone: Path, ref: str | None) -> str:
+    """Resolve ``ref`` to a commit SHA in a freshly fetched ``clone``.
+
+    A branch resolves through ``origin/<ref>``, not the clone's own stale branch of that name,
+    so it follows the remote tip. A tag or (abbreviated) SHA resolves as itself. No ref means
+    the remote's default branch.
+    """
+    if ref is None:
+        try:
+            return _git("-C", str(clone), "rev-parse", "--verify", "origin/HEAD^{commit}").strip()
+        except ManifestError:
+            # A clone made by an older boff can lack origin/HEAD: ask the remote once.
+            _git("-C", str(clone), "remote", "set-head", "origin", "--auto")
+            return _git("-C", str(clone), "rev-parse", "--verify", "origin/HEAD^{commit}").strip()
+    try:
+        return _git("-C", str(clone), "rev-parse", "--verify", f"origin/{ref}^{{commit}}").strip()
+    except ManifestError:
+        return _git("-C", str(clone), "rev-parse", "--verify", f"{ref}^{{commit}}").strip()
+
+
+def _checkout(clone: Path, sha: str) -> Path:
+    """Return a checkout of commit ``sha`` that no other reference will move.
+
+    Every commit gets its own worktree beside the clone. Paths kept past manifest load (hook
+    scripts, mise files, local plugin folders) then keep the content of the ref they came from,
+    however many other refs of the same repository the run resolves. A reused checkout is reset,
+    so an edit made inside the cache does not survive into a later run.
+    """
+    tree = clone.parent / f"{clone.name}-commits" / sha
+    if tree in _fetched:
+        return tree
+    if (tree / ".git").is_file():
+        _git("-C", str(tree), "reset", "--hard", "--quiet", sha)
+    else:
+        if tree.exists():
+            shutil.rmtree(tree)  # half-made by an interrupted run
+        # Forget worktrees whose directory is gone, so their paths can be registered again.
+        _git("-C", str(clone), "worktree", "prune")
+        _git("-C", str(clone), "worktree", "add", "--detach", "--force", str(tree), sha)
+    _fetched.add(tree)
+    return tree
+
+
+def fetch(ref: str) -> Path:
+    """Fetch the repository a git reference names and return its subdirectory, checked out.
+
+    The first reference to a repository in a process clones or fetches it; later ones reuse
+    that fetch. Each commit is checked out in a directory of its own (see :func:`_checkout`).
+    """
+    parsed = parse_git_ref(ref)
+    clone = _cache_dir(parsed.repo_url)
+    if clone not in _fetched:
+        if (clone / ".git").is_dir():
+            _git("-C", str(clone), "fetch", "--tags", "--force", "origin")
+        else:
+            clone.parent.mkdir(parents=True, exist_ok=True)
+            _git("clone", "--filter=blob:none", "--no-checkout", parsed.repo_url, str(clone))
+        _fetched.add(clone)
+    tree = _checkout(clone, _commit_of(clone, parsed.ref))
+    root = (tree / parsed.subdir).resolve() if parsed.subdir else tree
+    if not root.is_dir():
+        raise ManifestError(f"no directory {parsed.subdir!r} in {parsed.repo_url}, from {ref}")
+    return root
 
 
 class GitManifestSource(ManifestSource):
@@ -140,32 +216,7 @@ class GitManifestSource(ManifestSource):
         return ref.startswith(_REMOTE_PREFIXES)
 
     def resolve(self, ref: str, *, base_root: Path) -> Path:  # noqa: ARG002  (remote: no base)
-        parsed = parse_git_ref(ref)
-        cache = _cache_dir(parsed.repo_url)
-        if (cache / ".git").is_dir():
-            _git("-C", str(cache), "fetch", "--tags", "--force", "origin")
-        else:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            _git("clone", "--filter=blob:none", parsed.repo_url, str(cache))
-        self._checkout(cache, parsed.ref)
-        root = (cache / parsed.subdir).resolve() if parsed.subdir else cache
+        root = fetch(ref)
         if not (root / "boff.yaml").is_file():
             raise ManifestError(f"no boff.yaml in {root}, resolved from {ref}")
         return root
-
-    @staticmethod
-    def _checkout(cache: Path, ref: str | None) -> None:
-        """Checkout a specific git reference in the cache."""
-        if ref is None:
-            # Stay on the default branch; refresh it to the fetched upstream when possible.
-            try:
-                _git("-C", str(cache), "reset", "--hard", "@{u}")
-            except ManifestError:
-                pass
-            return
-        _git("-C", str(cache), "checkout", "--force", ref)
-        # Branch refs: fast-forward to the fetched tip. Tags/SHAs have no origin/<ref>; ignore.
-        try:
-            _git("-C", str(cache), "reset", "--hard", f"origin/{ref}")
-        except ManifestError:
-            pass

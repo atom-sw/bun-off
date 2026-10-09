@@ -107,6 +107,16 @@ def _claude_hooks_block(hooks: tuple[EventHook, ...]) -> dict[str, list[dict[str
     return block
 
 
+def _globs_frontmatter(globs: tuple[str, ...]) -> str:
+    """Build a ``globs:`` YAML frontmatter block (the format Claude Code honors).
+
+    Deliberately hand-rolled rather than routed through :func:`frontmatter_block`: Claude
+    honors the explicitly double-quoted ``globs: "a, b"`` form, which ``yaml.safe_dump`` would
+    render unquoted.
+    """
+    return f'---\nglobs: "{", ".join(globs)}"\n---\n\n'
+
+
 def _claude_spec(rule: PermissionRule) -> str:
     """Render one permission rule as a Claude ``Tool`` / ``Tool(specifier)`` string."""
     if rule.tool == "mcp":
@@ -132,20 +142,14 @@ class ClaudeAdapter(PlatformAdapter):
 
     @renders(Rule)
     def _rule(self, artifact: Rule, *, platform: str, scope: Scope) -> list[Operation]:
-        """Write a rule to ``.claude/rules/[<category>/]<name>.md``, prepending any globs.
-
-        Scoping renders as ``paths:``, the frontmatter key Claude Code actually reads for
-        path-scoped rules (live-verified against claude 2.1.241, 2026-08-23: a rule with
-        ``globs:`` frontmatter loads unconditionally on every file, silently defeating the
-        scope, while ``paths:`` loads only when a matching file is read).
-        """
+        """Write a rule to ``.claude/rules/[<category>/]<name>.md``, prepending any globs."""
         del platform
         rules_dir = require_rules_dir(self.layout.paths(scope), self.name)
         subdir = rules_dir / artifact.category if artifact.category else rules_dir
         target = subdir / f"{artifact.name}.md"
         content = artifact.content
         if artifact.globs:
-            content = frontmatter_block({"paths": list(artifact.globs)}) + content
+            content = _globs_frontmatter(artifact.globs) + content
         return [
             FileOperation(
                 target=target,

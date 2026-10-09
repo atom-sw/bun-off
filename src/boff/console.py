@@ -44,10 +44,10 @@ class Console:
         out: TextIO = dest if dest is not None else sys.stdout
         print(self._format(Color.GREEN, Symbol.CHECK, msg, out), file=out)
 
-    def debug(self, msg: str, dest: TextIO | None = None) -> None:
-        """Print a debug message, prefixed with a blue dot, only if verbose is True."""
+    def debug(self, msg: str, dest: TextIO | None = None, *, force: bool = False) -> None:
+        """Print a debug message, prefixed with a blue dot, only if verbose or ``force``."""
         out: TextIO = dest if dest is not None else sys.stdout
-        if self.verbose:
+        if self.verbose or force:
             print(self._format(Color.BLUE, Symbol.DOT, msg, out), file=out)
 
     def warning(self, msg: str, dest: TextIO | None = None) -> None:

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from boff.errors import ManifestError
 from boff.manifest_sources.base import ManifestSource
-from boff.manifest_sources.git import GitManifestSource
+from boff.manifest_sources.git import GitManifestSource, fetch
 from boff.manifest_sources.local import LocalManifestSource
 
 _SOURCES: list[ManifestSource] = [GitManifestSource(), LocalManifestSource()]
@@ -31,5 +31,6 @@ __all__ = [
     "GitManifestSource",
     "LocalManifestSource",
     "ManifestSource",
+    "fetch",
     "resolve_ref",
 ]

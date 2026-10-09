@@ -250,6 +250,22 @@ get the stale bytecode. So `skill.ships` skips a fixed set of build and editor d
 and passes everything else through. `sources/local.py` keeps mirroring unfiltered: it copies an
 explicitly named subtree to the workspace root, rather than a folder that tooling runs inside.
 
+**A skill or rule can come from Git, and becomes an ordinary one.** Skill collections are
+published as repositories in the cross-platform `SKILL.md` layout, often alongside a Claude
+plugin marketplace. Linking the marketplace reaches Claude Code only, so a skill or rule entry
+may instead carry `from: <git URL>`, naming a directory that stands in for the local `skills/` or
+`rules/`. The loader resolves the entry there with the unchanged file-or-folder lookup and
+produces a plain `Skill` or `Rule`. That is the whole design: fetching happens at load time, as
+for `extends:`, not as a deploy operation or a `PluginSource`, so rendering, state tracking,
+merge-by-name, and `boff check` all apply without knowing where the content came from. Two
+choices keep it consistent with the rest of boff. `from:` names the *collection* directory, not
+the skill, so the name in `boff.yaml` is still what is looked up and deployed. And there is no
+"import everything in the directory" form: every entry is still listed, so a bundle states what
+it deploys and an upstream addition never appears unannounced.
+
+`git.fetch` fetches each repository once per process: a bundle listing nine skills from one
+repository would otherwise make nine network round trips.
+
 `MCPServer.raw` is a map from platform name to the verbatim JSON object that platform expects.
 This is a deliberate escape hatch: MCP server configuration is platform-specific and changes
 frequently, so rather than trying to model it abstractly, the manifest author supplies the raw
@@ -752,6 +768,19 @@ first match wins. `LocalManifestSource` is the catch-all (any path relative to `
 `GitManifestSource` matches every remote URL and clones/fetches into `$XDG_CACHE_HOME/boff/git/`.
 Resolution is a load-time concern, so the git source shells out to `git` directly rather than
 emitting deploy `Operation`s.
+
+**One checkout per commit.** Each repository has one clone, used only to fetch, and every commit a
+reference resolves to gets its own worktree beside it (`<clone>-commits/<sha>/`). A single shared
+checkout looks sufficient and is not: three manifest fields keep *paths* into the cache and read
+them only after the whole stack has loaded (`pre_install`/`post_install` scripts at run time,
+`mise:` files and `source: local` plugin folders at plan time). With one checkout, resolving a
+second ref of the same repository moved those paths under the first manifest, so it ran the other
+ref's hooks or failed on files that ref lacks. That is reachable without anything exotic: a bundle
+repository tagging each bundle separately, and a stack naming two of its bundles at their own tags.
+A commit's directory never changes content, so the paths stay right for the whole run. Resolving
+a branch through `origin/<branch>` keeps it following the remote tip, and a reused checkout is
+`reset --hard` once per run, so an edit inside the cache does not persist. The cost is disk: one
+checkout per commit ever used, which accumulates as pins move. The cache is safe to delete.
 
 **The CLI's manifest arguments go through `resolve_ref` too** (`cli._load`, with
 `base_root=Path.cwd()`), so `boff deploy` and `boff check` accept exactly what `extends:` accepts.

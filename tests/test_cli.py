@@ -1,3 +1,4 @@
+import io
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -5,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from boff import verify as verify_module
-from boff.cli import ExitCode, main
+from boff.cli import (
+    ExitCode,
+    _print_ops,  # pyright: ignore[reportPrivateUsage]  (a one-op plan has no cheap CLI route)
+    main,
+)
+from boff.console import console
+from boff.types import DeleteOperation, Operation
 from tests.conftest import META, REMOTE_NAME, REMOTE_SUBDIR, SKILL_SUPPORT
 
 # The directory-form skill built by the `skill_bundle` fixture.
@@ -23,7 +30,35 @@ def test_deploy_dry_run_prints_op_count(
     out = capsys.readouterr().out
     assert rc == 0
     assert "planned" in out
-    assert "operation(s)" in out
+
+
+def test_dry_run_lists_each_operation_without_verbose(
+    sample_manifest: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(console, "verbose", False)
+    rc = main(["deploy", str(sample_manifest), "--platform", "claude", "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "FileOperation: " in out
+
+
+@pytest.mark.parametrize(
+    ("count", "header"),
+    [(1, "planned 1 operation:"), (2, "planned 2 operations:")],
+    ids=["singular", "plural"],
+)
+def test_print_ops_pluralizes_the_count(count: int, header: str) -> None:
+    ops: list[Operation] = [
+        DeleteOperation(target=Path(f"f{i}"), description=f"rm f{i}", prune_until=None)
+        for i in range(count)
+    ]
+    dest = io.StringIO()
+    _print_ops(ops, dest)
+    assert dest.getvalue().splitlines()[0].endswith(header)
 
 
 def test_deploy_dry_run_reports_missing_hook_script(

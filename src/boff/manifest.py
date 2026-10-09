@@ -36,7 +36,7 @@ from boff.artifacts import (
 )
 from boff.artifacts.permissions import CANONICAL_TOOLS
 from boff.errors import ManifestError
-from boff.manifest_sources import resolve_ref
+from boff.manifest_sources import GitManifestSource, fetch, resolve_ref
 from boff.sources.base import PluginSpec
 from boff.sources.local import LocalSpec
 
@@ -206,6 +206,24 @@ def _entry_globs(entry: Any) -> tuple[str, ...]:
     return tuple(globs)
 
 
+def _entry_base(root: Path, subdir: str, entry: Any, kind: str) -> Path:
+    """Return the directory an entry's content resolves in: local ``subdir`` or its ``from``.
+
+    ``from`` names a directory in a git repository that stands in for the local ``subdir``,
+    so the same ``<name>.md`` or ``<name>/`` lookup applies to both.
+    """
+    mapping = _as_mapping(entry) or {}
+    ref = mapping.get("from")
+    if ref is None:
+        return root / subdir
+    if not isinstance(ref, str) or not GitManifestSource().matches(ref):
+        raise ValueError(f"{kind} 'from' must be a git URL: {entry!r}")
+    try:
+        return fetch(ref)
+    except ManifestError as exc:
+        raise ManifestError(f"{kind} '{mapping.get('name')}': {exc}") from exc
+
+
 def _load_rules(root: Path, entries: list[Any]) -> tuple[Rule, ...]:
     """Load and parse a list of rule entries from the manifest."""
     rules: list[Rule] = []
@@ -216,7 +234,7 @@ def _load_rules(root: Path, entries: list[Any]) -> tuple[Rule, ...]:
         if category is not None and not isinstance(category, str):
             raise ValueError(f"rule 'category' must be a string: {entry!r}")
         globs = _entry_globs(entry)
-        md_path = root / RULES_DIR / f"{name}.md"
+        md_path = _entry_base(root, RULES_DIR, entry, "rule") / f"{name}.md"
         if not md_path.is_file():
             raise FileNotFoundError(f"rule content not found: {md_path}")
         rules.append(
@@ -258,8 +276,8 @@ def _load_skills(root: Path, entries: list[Any]) -> tuple[Skill, ...]:
     skills: list[Skill] = []
     for entry in entries:
         name, available_on = _entry_name_and_available_on(entry)
-        md_path = root / SKILLS_DIR / f"{name}.md"
-        skill_root = root / SKILLS_DIR / name
+        base = _entry_base(root, SKILLS_DIR, entry, "skill")
+        md_path, skill_root = base / f"{name}.md", base / name
         if skill_root.is_dir() and md_path.is_file():
             raise ValueError(
                 f"skill '{name}' is both a file and a directory: {md_path} and {skill_root}"

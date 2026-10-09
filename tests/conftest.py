@@ -7,6 +7,7 @@ flatteners, and the duplicated `META` prefix that previously drifted across test
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -26,6 +27,10 @@ META = "meta:\n  name: t\n  description: d\n"
 # The manifest folder and name inside the `bare_repo` fixture's repository.
 REMOTE_SUBDIR = "stack"
 REMOTE_NAME = "remote"
+
+# The rule ``r`` in the `content_repo` fixture, at tag ``v1`` and on ``main``.
+REMOTE_RULE_V1 = "# rule, first version\n"
+REMOTE_RULE_V2 = "# rule, second version\n"
 
 # The minimum a SKILL.md needs to load: every platform discovers a skill through these keys,
 # and `_load_skills` rejects a file that omits them.
@@ -165,6 +170,39 @@ def _git(*args: str, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, env={**env})
 
 
+def _bare_clone(work: Path, bare: Path) -> Path:
+    """Clone the committed ``work`` tree into a bare repo at ``bare``; return ``bare``."""
+    subprocess.run(
+        ["git", "clone", "--bare", "-q", str(work), str(bare)], check=True, capture_output=True
+    )
+    return bare
+
+
+def _commit_files(work: Path, files: Mapping[str, str], message: str) -> None:
+    """Write ``files`` under ``work`` and commit them."""
+    for rel, text in files.items():
+        target = work / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    _git("add", "-A", cwd=work)
+    _git("commit", "-qm", message, cwd=work)
+
+
+def push_commit(bare: Path, files: Mapping[str, str]) -> None:
+    """Commit ``files`` on top of ``main`` in ``bare``, as an upstream push would."""
+    work = Path(tempfile.mkdtemp(dir=bare.parent))
+    subprocess.run(["git", "clone", "-q", str(bare), str(work)], check=True, capture_output=True)
+    _commit_files(work, files, "upstream")
+    _git("push", "-q", "origin", "main", cwd=work)
+
+
+def head_of(bare: Path) -> str:
+    """Return the commit ``main`` points at in ``bare``."""
+    return subprocess.run(
+        ["git", "-C", str(bare), "rev-parse", "main"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 @pytest.fixture
 def bare_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A bare git repo holding a ``<REMOTE_SUBDIR>/`` manifest on ``main``; return its path.
@@ -175,17 +213,44 @@ def bare_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     work = tmp_path / "work"
-    sub = work / REMOTE_SUBDIR
-    sub.mkdir(parents=True)
-    (sub / "boff.yaml").write_text(f"meta:\n  name: {REMOTE_NAME}\n  description: r\n")
+    work.mkdir()
     _git("init", "-q", "-b", "main", ".", cwd=work)
-    _git("add", "-A", cwd=work)
-    _git("commit", "-qm", "init", cwd=work)
-    bare = tmp_path / "repo.git"
-    subprocess.run(
-        ["git", "clone", "--bare", "-q", str(work), str(bare)], check=True, capture_output=True
+    _commit_files(
+        work,
+        {f"{REMOTE_SUBDIR}/boff.yaml": f"meta:\n  name: {REMOTE_NAME}\n  description: r\n"},
+        "init",
     )
-    return bare
+    return _bare_clone(work, tmp_path / "repo.git")
+
+
+@pytest.fixture
+def content_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A bare git repo of skills and rules with no ``boff.yaml``, as ``from:`` references it.
+
+    It holds a directory-form skill ``s``, a flat skill ``flat``, a skill ``inert`` without
+    frontmatter, and a rule ``r``. The rule reads ``REMOTE_RULE_V1`` at tag ``v1`` and
+    ``REMOTE_RULE_V2`` on ``main``, so a test can load two refs of one repository.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    work = tmp_path / "content"
+    work.mkdir()
+    _git("init", "-q", "-b", "main", ".", cwd=work)
+    skill_dir = {"skills/s/SKILL.md": SKILL_BODY} | {
+        f"skills/s/{rel}": text for rel, text in SKILL_SUPPORT.items()
+    }
+    _commit_files(
+        work,
+        skill_dir
+        | {
+            "skills/flat.md": SKILL_BODY.replace("name: s", "name: flat"),
+            "skills/inert/SKILL.md": "# no frontmatter\n",
+            "rules/r.md": REMOTE_RULE_V1,
+        },
+        "v1",
+    )
+    _git("tag", "v1", cwd=work)
+    _commit_files(work, {"rules/r.md": REMOTE_RULE_V2}, "v2")
+    return _bare_clone(work, tmp_path / "content.git")
 
 
 def findings_of(report: CheckReport, status: Status) -> list[Finding]:

@@ -96,6 +96,8 @@ rules:
 
 skills:
   - format
+  - name: lean-proof           # fetched from a Git repository (see "Skills and rules from Git")
+    from: https://github.com/leanprover/skills/tree/7d3da02/skills
 
 slash_commands:
   - refactor
@@ -179,7 +181,7 @@ boff deploy ./ai-cannot-code-stack --platform claude --dry-run
 #   Python development tools.
 #   author: The Anti-Automation League
 #   extends: ../claude-poweruser-stack
-# planned 12 operation(s):
+# planned 12 operations:
 #   ...
 ```
 
@@ -240,7 +242,10 @@ default branch. Spell a ref containing a slash (e.g., `writing/0.1.0`) with `@<r
 an `@` is not supported at all: Bun Off splits the reference on its first `@`.
 
 Bun Off fetches into a cache under `$XDG_CACHE_HOME/boff/git/` (or `~/.cache/boff/git/`) and
-reuses it on later runs. Every spelling of one repository shares a single clone.
+reuses it on later runs. Every spelling of one repository shares a single clone, and each commit
+you reference gets its own checkout beside it, so a stack can combine bundles from one repository
+at different tags. Checkouts of commits you no longer reference stay on disk; deleting the whole
+cache directory is safe, and Bun Off fetches again on the next run.
 
 ### Merge semantics
 
@@ -271,7 +276,8 @@ intend cannot pass unnoticed.
 Inheritance cycles (a manifest that extends itself directly or transitively) raise an error.
 
 > ⚠️ Resolving a remote reference runs `git` against the referenced URL, and deploying a manifest
-> runs its `pre_install` and `post_install` hooks. Only extend and deploy manifests you trust.
+> runs its `pre_install` and `post_install` hooks. Only extend and deploy manifests you trust, and
+> only fetch [skills and rules](#skills-and-rules-from-git) from repositories you trust.
 
 
 ## 📄 Artifact types
@@ -321,12 +327,16 @@ Platform support differs:
 
 | Platform | Behavior |
 |---|---|
-| Claude Code | Bun Off prepends a `paths:` frontmatter block (a YAML list) to the rule file, which defines path-scoped rules in Claude Code. Thus, the rule loads only when matching files are in play. |
-| OpenCode | OpenCode has no conditional, path-scoped loading: its `instructions` globs only select which files to always load. Bun Off deploys the rule unscoped and logs a warning that the scope is not enforced. |
+| Claude Code | Bun Off prepends a `globs:` frontmatter block to the rule file (the key Claude Code honors: the documented `paths:` key is silently broken). The rule loads only when matching files are in play. |
+| OpenCode | OpenCode has no conditional, path-scoped loading: its `instructions` globs only select which files to always load. Bun Off deploys the rule unscoped (as it does today) and logs a warning that the scope is not enforced. |
 | Antigravity CLI | Rules are inlined into `GEMINI.md`, which loads wholesale. Bun Off deploys the rule unscoped and logs a warning that the scope is not enforced. |
 
-Bun Off deploys Claude rules only to the workspace (`.claude/rules/`), never to user-level rules,
-so scoping only needs to hold there.
+Two caveats:
+
+- Claude Code honors `globs:` only for workspace-level rules (`.claude/rules/`), not user-level
+  rules. Indeed, Bun Off deploys to the workspace.
+- `globs:` patterns are written verbatim into a double-quoted YAML string, so a pattern must not
+  contain a double-quote character.
 
 ### Skills
 
@@ -395,6 +405,41 @@ Three things to know:
 Removing a supporting file from a bundle removes the deployed copy on the next `boff deploy`,
 and prunes the directory if it empties. `boff check` verifies every supporting file, so an
 edited template is reported as drift.
+
+### Skills and rules from Git
+
+A skill or rule entry can take its content from a Git repository instead of the manifest folder.
+`from:` names a directory in the repository that stands in for the local `skills/` or `rules/`,
+and Bun Off looks the entry's name up inside it exactly as it would locally: `<name>.md`, or a
+`<name>/` folder holding `SKILL.md` for a skill.
+
+```yaml
+skills:
+  - lean-lint                  # local: skills/lean-lint.md
+  - name: lean-proof           # remote: skills/lean-proof/ in the repository, at 7d3da02
+    from: &lean-fro https://github.com/leanprover/skills/tree/7d3da0282e7b724b07620e45cf212f2e05e19334/skills
+  - { name: lean-mwe, from: *lean-fro }
+rules:
+  - { name: house-style, from: "https://github.com/org/conventions/rules@v2" }
+```
+
+A fetched skill or rule is an ordinary one from then on: it deploys to every platform, merges and
+overrides by name, and `boff check` verifies it. This is how a bundle ships a skill collection
+published in the cross-platform `SKILL.md` layout (such as the Lean FRO skills above) to OpenCode
+and Antigravity as well as Claude Code, rather than through one platform's plugin marketplace.
+
+- `from:` takes any Git URL in the [reference scheme](#reference-scheme), and must name a
+  directory. A YAML anchor (`&lean-fro`, `*lean-fro`) saves repeating it across entries.
+- Every entry is still listed by name: there is no "import the whole directory", so a bundle
+  states exactly what it deploys.
+- **Pin a tag or commit.** Without one, `from:` follows the default branch: every load needs the
+  network, and `boff check` reports drift whenever upstream moves until you deploy again.
+- Bun Off fetches each repository once per run, into the same cache as `extends:`, however many
+  entries name it.
+- The deployed name is the entry's `name`, which must match the remote file or folder. Frontmatter
+  checks apply as for a local skill, so a remote skill whose frontmatter `name` differs from its
+  folder name triggers the same warning.
+- `from:` is for skills and rules only, and does not accept a local path.
 
 ### Slash commands
 
